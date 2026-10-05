@@ -1,0 +1,118 @@
+#!/usr/bin/env bash
+#
+# Pre-commit guard against committing company-sensitive material.
+#
+# This repo is internal work made public, so the cost of leaking internal
+# architecture, hostnames, dashboards, customer data, or credentials is high.
+# The hook reviews the *added* lines of the staged diff in two layers:
+#
+#   1. Deterministic regex — fast, free, runs even offline. Ships with only
+#      GENERIC secret shapes (safe to publish). Company/project-specific markers
+#      are loaded from an optional local denylist that is NOT committed:
+#          .githooks/patterns.local   (gitignored; one extended-regex per line)
+#      Keep org-specific terms there so the public repo never contains them.
+#   2. AI review — sends the added lines to the `claude` CLI for a judgement
+#      call on subtler sensitivity. Skipped if `claude` is not installed.
+#
+# A non-empty match in either layer blocks the commit.
+#
+# Escape hatches (use your judgement — a block can be a false positive):
+#   git commit --no-verify           # bypass for one commit
+#   SKIP_SENSITIVE_CHECK=1 git ...    # bypass via environment
+#   SENSITIVE_CHECK_MODEL=<id>        # override the AI model (default below)
+#
+set -euo pipefail
+
+[[ "${SKIP_SENSITIVE_CHECK:-}" == "1" ]] && exit 0
+
+diff_content="$(git diff --cached --no-color || true)"
+[[ -z "$diff_content" ]] && exit 0
+
+# Scan only added lines (leading '+'), excluding the '+++' file header.
+added="$(printf '%s\n' "$diff_content" | grep -E '^\+' | grep -vE '^\+\+\+' || true)"
+[[ -z "$added" ]] && exit 0
+
+fail=0
+
+# ---------------------------------------------------------------------------
+# Layer 1 — deterministic patterns.
+# Shipped list is intentionally GENERIC (no org-specific terms). Add private
+# markers to .githooks/patterns.local (gitignored) instead of editing this file.
+# ---------------------------------------------------------------------------
+patterns=(
+  'BEGIN [A-Z ]*PRIVATE KEY'
+  'AKIA[0-9A-Z]{16}'                              # AWS access key id
+  'eyJ[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{10,}'     # JWT-shaped token
+  'xox[baprs]-[0-9A-Za-z-]{10,}'                  # Slack token
+  'gh[pousr]_[A-Za-z0-9]{20,}'                    # GitHub token
+)
+
+# Append any local, uncommitted markers.
+repo_root="$(git rev-parse --show-toplevel)"
+local_denylist="${repo_root}/.githooks/patterns.local"
+if [[ -f "$local_denylist" ]]; then
+  while IFS= read -r line; do
+    [[ -z "$line" || "$line" == \#* ]] && continue
+    patterns+=("$line")
+  done < "$local_denylist"
+fi
+
+regex_hits=""
+for p in "${patterns[@]}"; do
+  m="$(printf '%s\n' "$added" | grep -nE "$p" || true)"
+  [[ -n "$m" ]] && regex_hits+="  [match]"$'\n'"${m}"$'\n'
+done
+if [[ -n "$regex_hits" ]]; then
+  echo "✖ pre-commit: deterministic sensitive-content match:" >&2
+  printf '%s\n' "$regex_hits" >&2
+  fail=1
+fi
+
+# ---------------------------------------------------------------------------
+# Layer 2 — AI review via the claude CLI. Prompt describes CATEGORIES only,
+# never specific internal names, so this file stays safe to publish.
+# ---------------------------------------------------------------------------
+if command -v claude >/dev/null 2>&1; then
+  model="${SENSITIVE_CHECK_MODEL:-claude-sonnet-5}"
+  read -r -d '' prompt <<'PROMPT' || true
+You are a pre-commit secret/sensitivity gate for a PUBLIC open-source repository maintained by
+an employee of a software company. The input on stdin is the ADDED lines of a staged git diff.
+Flag anything unsafe to publish, including:
+- internal-only hostnames, URLs, or domains (private infra endpoints, internal dashboards, runbooks)
+- non-public infrastructure or architecture details (internal storage/database vendors and engines,
+  internal service or cell topology, internal data pipelines, internal SLOs/thresholds)
+- internal-only repository, project, or dashboard names
+- references to hiring, interviews, or job candidates
+- customer names or customer data
+- credentials, API keys, tokens, private keys, or internal meeting recording links
+Do NOT flag ordinary open-source code, public documentation, or obvious local-demo passwords
+(e.g. POSTGRES_PASSWORD=temporal in a compose file).
+Do NOT flag obvious PLACEHOLDER or redaction tokens, even when they sit exactly where a real
+secret would go. Treat these as already-redacted, never as leaks:
+- angle-bracket placeholders: <account-id>, <your-account>, <namespace-id>, <token>, <region>
+- template/example tokens: REDACTED, CHANGEME, xxxx/******, your-*, my-*, example.com, foo/bar
+A line like "TEMPORAL_NAMESPACE=ziggymart.<account-id>" or "my-namespace.<account-id>.txt" is SAFE — the
+real value is not present. Judge only the literal text given; do not imagine the real value
+behind a placeholder, and ignore removed/old content (you only receive added lines).
+Respond with EXACTLY one line that is either "VERDICT: CLEAN" or "VERDICT: BLOCK". If BLOCK, add
+one bullet per finding beneath it.
+PROMPT
+  verdict="$(printf '%s' "$added" | claude -p "$prompt" --model "$model" 2>/dev/null || true)"
+  if [[ -z "$verdict" ]]; then
+    echo "⚠ pre-commit: AI review did not run (claude returned nothing) — relied on regex layer only." >&2
+  elif printf '%s' "$verdict" | grep -q 'VERDICT: BLOCK'; then
+    echo "✖ pre-commit: AI flagged sensitive content:" >&2
+    printf '%s\n' "$verdict" >&2
+    fail=1
+  fi
+else
+  echo "⚠ pre-commit: 'claude' CLI not found — ran deterministic checks only." >&2
+fi
+
+if [[ "$fail" == "1" ]]; then
+  echo "" >&2
+  echo "Commit blocked. Redact the flagged content, or bypass with 'git commit --no-verify'" >&2
+  echo "if it's a false positive (your call)." >&2
+  exit 1
+fi
+exit 0

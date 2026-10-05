@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+#
+# Strip Co-authored-by trailers AI agents inject into commit messages.
+# Author/committer stay unchanged; only the message body is cleaned.
+#
+set -euo pipefail
+
+case "${2:-}" in
+  merge|squash) exit 0 ;;
+esac
+
+msg_file="${1:?missing commit message file}"
+[[ -f "$msg_file" ]] || exit 0
+
+tmp="$(mktemp)"
+grep -viE '^Co-[Aa]uthored-[Bb]y:' "$msg_file" > "$tmp" || true
+mv "$tmp" "$msg_file"

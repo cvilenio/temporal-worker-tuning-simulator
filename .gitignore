@@ -1,0 +1,38 @@
+# OS
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.env
+.env.*
+.pytest_cache/
+.ruff_cache/
+
+# Go
+bin/
+dist/
+*.exe
+
+# Node / TypeScript
+node_modules/
+*.tsbuildinfo
+
+# Secrets
+.secrets/**
+!.secrets/README.md
+*.key
+*.pem
+*-apikey*
+*.tmprl.txt
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# Local-only sensitive-marker denylist for the pre-commit hook (never commit)
+.githooks/patterns.local
