@@ -9,7 +9,6 @@ import {
 import {
   activityLaneY,
   maxVisibleQueueTasks,
-  ordinalFromId,
   pollerPoint,
   queueEgress,
   queueIngress,
@@ -27,6 +26,9 @@ const taskOriginPoint = (type: TaskType): Point => ({
 const laneY = (type: TaskType) => type === 'workflow' ? workflowLaneY : activityLaneY
 
 const enqueueStartTime = (task: SimulationTask) => task.enqueueStartedAt ?? task.scheduledAt
+
+const assignedIndex = (id: string | undefined, items: { id: string }[]): number =>
+  Math.max(0, items.findIndex((item) => item.id === id))
 
 const interpolate = (start: Point, end: Point, progress: number): Point => ({
   x: start.x + (end.x - start.x) * Math.max(0, Math.min(1, progress)),
@@ -53,10 +55,10 @@ function positionFor(
 ): Point {
   const y = laneY(task.type)
   const storage = queueStoragePoint(queueIndex, y)
-  const pollerCount = task.type === 'workflow' ? snapshot.workflowPollers.length : snapshot.activityPollers.length
-  const slotCount = task.type === 'workflow' ? snapshot.workflowSlots.length : snapshot.activitySlots.length
-  const poller = pollerPoint(ordinalFromId(task.assignedPollerId), pollerCount, y)
-  const slot = slotPoint(ordinalFromId(task.assignedSlotId), slotCount, y)
+  const pollers = task.type === 'workflow' ? snapshot.workflowPollers : snapshot.activityPollers
+  const slots = task.type === 'workflow' ? snapshot.workflowSlots : snapshot.activitySlots
+  const poller = pollerPoint(assignedIndex(task.assignedPollerId, pollers), pollers.length, y)
+  const slot = slotPoint(assignedIndex(task.assignedSlotId, slots), slots.length, y)
 
   if (task.state === 'enqueuing') {
     const progress = (snapshot.simulatedTime - enqueueStartTime(task)) / QUEUE_ADMISSION_SECONDS
@@ -93,10 +95,10 @@ export function TaskLayer({ snapshot }: { snapshot: SimulationSnapshot }) {
       {snapshot.tasks.map((task) => {
         if (task.state !== 'acquired') return null
         const y = laneY(task.type)
-        const pollerCount = task.type === 'workflow' ? snapshot.workflowPollers.length : snapshot.activityPollers.length
-        const slotCount = task.type === 'workflow' ? snapshot.workflowSlots.length : snapshot.activitySlots.length
-        const poller = pollerPoint(ordinalFromId(task.assignedPollerId), pollerCount, y)
-        const slot = slotPoint(ordinalFromId(task.assignedSlotId), slotCount, y)
+        const pollers = task.type === 'workflow' ? snapshot.workflowPollers : snapshot.activityPollers
+        const slots = task.type === 'workflow' ? snapshot.workflowSlots : snapshot.activitySlots
+        const poller = pollerPoint(assignedIndex(task.assignedPollerId, pollers), pollers.length, y)
+        const slot = slotPoint(assignedIndex(task.assignedSlotId, slots), slots.length, y)
         const egress = queueEgress(y)
         return (
           <g key={`acquired-${task.id}`}>
@@ -109,10 +111,10 @@ export function TaskLayer({ snapshot }: { snapshot: SimulationSnapshot }) {
       {snapshot.tasks.map((task) => {
         if (task.state !== 'dispatching') return null
         const y = laneY(task.type)
-        const pollerCount = task.type === 'workflow' ? snapshot.workflowPollers.length : snapshot.activityPollers.length
-        const slotCount = task.type === 'workflow' ? snapshot.workflowSlots.length : snapshot.activitySlots.length
-        const poller = pollerPoint(ordinalFromId(task.assignedPollerId), pollerCount, y)
-        const slot = slotPoint(ordinalFromId(task.assignedSlotId), slotCount, y)
+        const pollers = task.type === 'workflow' ? snapshot.workflowPollers : snapshot.activityPollers
+        const slots = task.type === 'workflow' ? snapshot.workflowSlots : snapshot.activitySlots
+        const poller = pollerPoint(assignedIndex(task.assignedPollerId, pollers), pollers.length, y)
+        const slot = slotPoint(assignedIndex(task.assignedSlotId, slots), slots.length, y)
         return <line key={`dispatch-${task.id}`} x1={poller.x} y1={poller.y} x2={slot.x} y2={slot.y} className={`active-dispatch-line ${task.type}-path`} />
       })}
       {snapshot.tasks.map((task) => {
@@ -125,20 +127,33 @@ export function TaskLayer({ snapshot }: { snapshot: SimulationSnapshot }) {
           && queueDepth(task.type) > maxVisibleQueueTasks
         ) return null
         const point = positionFor(task, snapshot, queueIndex)
+        const sticky = task.type === 'workflow' && task.routingState === 'sticky-wait'
+        const fallback = task.type === 'workflow'
+          && task.stickyFallbackAt !== undefined
+          && snapshot.simulatedTime - task.stickyFallbackAt <= 0.8
+        const replaying = task.type === 'workflow' && task.executionPhase === 'replay'
+        const worker = sticky
+          ? snapshot.workers.find((candidate) => candidate.id === task.preferredWorkerId)
+          : undefined
         return (
-          <rect
-            key={task.id}
-            data-task-id={task.id}
-            data-task-state={task.state}
-            x={point.x - 5}
-            y={point.y - 5}
-            width="10"
-            height="10"
-            rx="1"
-            className={`task task-${task.type}${task.resourceProfile === 'io' ? ' io-bound' : ''}`}
-          >
-            <title>{task.id} - {task.state}</title>
-          </rect>
+          <g key={task.id} className={`${sticky ? 'sticky-wait' : ''}${fallback ? ' sticky-fallback' : ''}`}>
+            <rect
+              data-task-id={task.id}
+              data-task-state={task.state}
+              x={point.x - 5}
+              y={point.y - 5}
+              width="10"
+              height="10"
+              rx="1"
+              className={`task task-${task.type}${task.resourceProfile === 'io' ? ' io-bound' : ''}${replaying ? ' replaying' : ''}`}
+            >
+              <title>{`${task.id} - ${task.state}${replaying ? ' - replaying Workflow History after cache miss' : ''}${sticky ? ` - waiting for warm Worker ${worker?.displayId}` : ''}`}</title>
+            </rect>
+            {sticky && <>
+              <circle cx={point.x} cy={point.y} r="9" className="sticky-wait-ring" />
+              <text x={point.x + 9} y={point.y - 7} className="sticky-worker-badge">{worker?.displayId}</text>
+            </>}
+          </g>
         )
       })}
     </g>

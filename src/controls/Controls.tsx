@@ -6,21 +6,29 @@ export type GenerationMode = 'triggered' | 'continuous'
 
 interface ControlsProps {
   config: SimulationConfig
+  playing: boolean
+  speed: number
+  onConfigChange: (changes: Partial<SimulationConfig>) => void
+  onPlayingChange: (playing: boolean) => void
+  onSpeedChange: (speed: number) => void
+}
+
+interface WorkflowGenerationControlsProps {
+  config: SimulationConfig
   workflowRateValue: number
   workflowRateUnit: WorkflowRateUnit
   generationMode: GenerationMode
   workflowCount: number
   playing: boolean
-  speed: number
+  canResume: boolean
   onConfigChange: (changes: Partial<SimulationConfig>) => void
   onWorkflowRateValueChange: (value: number) => void
   onWorkflowRateUnitChange: (unit: WorkflowRateUnit) => void
   onGenerationModeChange: (mode: GenerationMode) => void
   onWorkflowCountChange: (count: number) => void
-  onStartWorkflows: () => void
+  onStart: () => void
   onPlayingChange: (playing: boolean) => void
   onReset: () => void
-  onSpeedChange: (speed: number) => void
 }
 
 interface RangeControlProps {
@@ -112,22 +120,136 @@ function DiscreteRangeControl({
   )
 }
 
-export function Controls({
+export function WorkflowGenerationControls({
   config,
   workflowRateValue,
   workflowRateUnit,
   generationMode,
   workflowCount,
   playing,
-  speed,
+  canResume,
   onConfigChange,
   onWorkflowRateValueChange,
   onWorkflowRateUnitChange,
   onGenerationModeChange,
   onWorkflowCountChange,
-  onStartWorkflows,
+  onStart,
   onPlayingChange,
   onReset,
+}: WorkflowGenerationControlsProps) {
+  const activityBatches = Math.ceil(config.activitiesPerWorkflow / config.activityFanout)
+  const [rateDraft, setRateDraft] = useState(String(workflowRateValue))
+
+  useEffect(() => {
+    setRateDraft(String(workflowRateValue))
+  }, [workflowRateValue])
+
+  const commitRate = () => {
+    const parsed = Number(rateDraft)
+    const next = Number.isFinite(parsed) ? Math.max(0, parsed) : workflowRateValue
+    setRateDraft(String(next))
+    onWorkflowRateValueChange(next)
+  }
+
+  return (
+    <section className="workflow-generation-controls" aria-label="Workflow generation">
+      <div className="generation-mode" role="radiogroup" aria-label="Workflow generation mode">
+        <label>
+          <input type="radio" name="workload-mode" checked={generationMode === 'triggered'} onChange={() => onGenerationModeChange('triggered')} />
+          Triggered
+        </label>
+        <label>
+          <input type="radio" name="workload-mode" checked={generationMode === 'continuous'} onChange={() => onGenerationModeChange('continuous')} />
+          Continuous
+        </label>
+      </div>
+
+      {generationMode === 'triggered' ? (
+        <div className="top-count-control">
+          <label htmlFor="workflow-count">Workflows to start</label>
+          <div className="count-stepper">
+            <button type="button" aria-label="Decrease Workflow count" onClick={() => onWorkflowCountChange(Math.max(1, workflowCount - 1))}>-</button>
+            <input
+              id="workflow-count"
+              aria-label="Workflow count"
+              type="number"
+              min="1"
+              max="1000"
+              step="1"
+              value={workflowCount}
+              onChange={(event) => {
+                const value = Number(event.target.value)
+                if (Number.isFinite(value)) onWorkflowCountChange(Math.max(1, Math.min(1000, Math.floor(value))))
+              }}
+            />
+            <button type="button" aria-label="Increase Workflow count" onClick={() => onWorkflowCountChange(Math.min(1000, workflowCount + 1))}>+</button>
+          </div>
+        </div>
+      ) : (
+        <div className="top-rate-control">
+          <label htmlFor="workflow-rate-value">Workflow starts</label>
+          <input
+            id="workflow-rate-value"
+            type="number"
+            min="0"
+            step="1"
+            value={rateDraft}
+            onChange={(event) => setRateDraft(event.target.value)}
+            onBlur={commitRate}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') commitRate()
+            }}
+          />
+          <select
+            aria-label="Workflow start rate unit"
+            value={workflowRateUnit}
+            onChange={(event) => onWorkflowRateUnitChange(event.target.value as WorkflowRateUnit)}
+          >
+            <option value="second">per second</option>
+            <option value="minute">per minute</option>
+            <option value="hour">per hour</option>
+          </select>
+        </div>
+      )}
+
+      <div className="generation-actions">
+        <button type="button" className="start-workflow-button" onClick={onStart} disabled={generationMode === 'continuous' && playing}>
+          {generationMode === 'triggered'
+            ? `Start ${workflowCount} Workflow${workflowCount === 1 ? '' : 's'}`
+            : 'Start continuous'}
+        </button>
+        <button
+          type="button"
+          onClick={() => onPlayingChange(!playing)}
+          disabled={!playing && !canResume}
+        >
+          {playing ? 'Pause' : canResume ? 'Resume' : 'Pause'}
+        </button>
+        <button type="button" onClick={onReset}>Reset</button>
+      </div>
+
+      <details className="workflow-shape-controls">
+        <summary>Workflow shape</summary>
+        <p>Each Workflow Task schedules one Activity batch. Every Activity in that batch must finish before the next batch starts.</p>
+        <div className="workflow-shape-grid">
+          <RangeControl label="Activity batches / Workflow" value={activityBatches} min={1} max={10} onChange={(value) => onConfigChange({ activitiesPerWorkflow: value * config.activityFanout })} />
+          <RangeControl label="Activities / batch" value={config.activityFanout} min={1} max={10} onChange={(value) => onConfigChange({ activitiesPerWorkflow: activityBatches * value, activityFanout: value })} />
+        </div>
+        <div className="workflow-shape-tally" aria-live="polite">
+          <span><strong>{activityBatches + 1}</strong> Workflow Tasks / Workflow</span>
+          <span><strong>{config.activitiesPerWorkflow}</strong> Activity Tasks / Workflow</span>
+        </div>
+      </details>
+    </section>
+  )
+}
+
+export function Controls({
+  config,
+  playing,
+  speed,
+  onConfigChange,
+  onPlayingChange,
   onSpeedChange,
 }: ControlsProps) {
   const cpuCapacity = config.cpuCapacity ?? defaultConfig.cpuCapacity
@@ -160,16 +282,11 @@ export function Controls({
     : { taskResourceProfilesLocked: false })
   const [speedDraft, setSpeedDraft] = useState(String(speed))
   const [speedSliderDraft, setSpeedSliderDraft] = useState(Math.min(speed, 2))
-  const [rateDraft, setRateDraft] = useState(String(workflowRateValue))
 
   useEffect(() => {
     setSpeedDraft(String(speed))
     setSpeedSliderDraft(Math.min(speed, 2))
   }, [speed])
-
-  useEffect(() => {
-    setRateDraft(String(workflowRateValue))
-  }, [workflowRateValue])
 
   const commitSpeed = () => {
     const parsed = Number(speedDraft)
@@ -182,19 +299,10 @@ export function Controls({
     if (next !== speed) onSpeedChange(next)
   }
 
-  const commitRate = () => {
-    const parsed = Number(rateDraft)
-    const next = Number.isFinite(parsed) ? Math.max(0, parsed) : workflowRateValue
-    setRateDraft(String(next))
-    onWorkflowRateValueChange(next)
-  }
-
   return (
     <section className="controls" aria-label="Simulation controls">
       <div className="transport-controls">
         <button type="button" onClick={() => onPlayingChange(true)} disabled={playing}>Play</button>
-        <button type="button" onClick={() => onPlayingChange(false)} disabled={!playing}>Pause</button>
-        <button type="button" onClick={onReset}>Reset</button>
         <div className="speed-control">
           <label htmlFor="simulation-speed">Time scale</label>
           <input
@@ -236,77 +344,15 @@ export function Controls({
       </div>
       <div className="control-grid">
         <fieldset>
-          <legend>Workflow generation</legend>
-          <div className="workload-mode" role="radiogroup" aria-label="Workflow generation mode">
-            <label>
-              <input type="radio" name="workload-mode" checked={generationMode === 'triggered'} onChange={() => onGenerationModeChange('triggered')} />
-              Triggered
-            </label>
-            <label>
-              <input type="radio" name="workload-mode" checked={generationMode === 'continuous'} onChange={() => onGenerationModeChange('continuous')} />
-              Continuous
-            </label>
-          </div>
-          {generationMode === 'triggered' ? (
-            <div className="triggered-workload">
-              <label htmlFor="workflow-count">Workflows to start</label>
-              <div className="count-stepper">
-                <button type="button" aria-label="Decrease Workflow count" onClick={() => onWorkflowCountChange(Math.max(1, workflowCount - 1))}>-</button>
-                <input
-                  id="workflow-count"
-                  aria-label="Workflow count"
-                  type="number"
-                  min="1"
-                  max="1000"
-                  step="1"
-                  value={workflowCount}
-                  onChange={(event) => {
-                    const value = Number(event.target.value)
-                    if (Number.isFinite(value)) onWorkflowCountChange(Math.max(1, Math.min(1000, Math.floor(value))))
-                  }}
-                />
-                <button type="button" aria-label="Increase Workflow count" onClick={() => onWorkflowCountChange(Math.min(1000, workflowCount + 1))}>+</button>
-              </div>
-              <button type="button" className="start-workflow-button" onClick={onStartWorkflows}>
-                Start {workflowCount} Workflow{workflowCount === 1 ? '' : 's'}
-              </button>
-            </div>
-          ) : (
-            <div className="workflow-rate-control">
-              <label htmlFor="workflow-rate-value">Workflow starts</label>
-              <input
-                id="workflow-rate-value"
-                type="number"
-                min="0"
-                step="1"
-                value={rateDraft}
-                onChange={(event) => setRateDraft(event.target.value)}
-                onBlur={commitRate}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter') commitRate()
-                }}
-              />
-              <select
-                aria-label="Workflow start rate unit"
-                value={workflowRateUnit}
-                onChange={(event) => onWorkflowRateUnitChange(event.target.value as WorkflowRateUnit)}
-              >
-                <option value="second">per second</option>
-                <option value="minute">per minute</option>
-                <option value="hour">per hour</option>
-              </select>
-            </div>
-          )}
-          <RangeControl label="Activities / Workflow" value={config.activitiesPerWorkflow} min={1} max={10} onChange={(value) => onConfigChange({ activitiesPerWorkflow: value, activityFanout: Math.min(config.activityFanout, value) })} />
-          <RangeControl label="Activity fanout" value={config.activityFanout} min={1} max={config.activitiesPerWorkflow} onChange={(value) => onConfigChange({ activityFanout: value })} />
-        </fieldset>
-        <fieldset>
           <legend>Worker</legend>
-          <RangeControl label="Workflow Pollers" value={config.workflowPollers} min={0} max={10} onChange={(value) => onConfigChange({ workflowPollers: value })} />
-          <RangeControl label="Workflow Slots" value={config.workflowSlots} min={0} max={16} onChange={(value) => onConfigChange({ workflowSlots: value })} />
-          <RangeControl label="Activity Pollers" value={config.activityPollers} min={0} max={10} onChange={(value) => onConfigChange({ activityPollers: value })} />
-          <RangeControl label="Activity Slots" value={config.activitySlots} min={0} max={32} onChange={(value) => onConfigChange({ activitySlots: value })} />
-          <DiscreteRangeControl label="CPU capacity" value={cpuCapacity} values={CPU_CAPACITY_OPTIONS} suffix=" CPU" onChange={(value) => onConfigChange({ cpuCapacity: value })} />
+          <RangeControl label="Workflow Pollers / Worker" value={config.workflowPollers} min={0} max={10} onChange={(value) => onConfigChange({ workflowPollers: value })} />
+          <RangeControl label="Workflow Slots / Worker" value={config.workflowSlots} min={0} max={16} onChange={(value) => onConfigChange({ workflowSlots: value })} />
+          <RangeControl label="Activity Pollers / Worker" value={config.activityPollers} min={0} max={10} onChange={(value) => onConfigChange({ activityPollers: value })} />
+          <RangeControl label="Activity Slots / Worker" value={config.activitySlots} min={0} max={32} onChange={(value) => onConfigChange({ activitySlots: value })} />
+          <DiscreteRangeControl label="CPU / Worker" value={cpuCapacity} values={CPU_CAPACITY_OPTIONS} suffix=" CPU" onChange={(value) => onConfigChange({ cpuCapacity: value })} />
+          <RangeControl label="Workflow Cache Capacity / Worker" value={config.workflowCacheCapacity} min={0} max={50} onChange={(value) => onConfigChange({ workflowCacheCapacity: value })} />
+          <RangeControl label="Workflow Cache Memory / Entry" value={config.workflowCacheEntryMemoryMb} min={1} max={16} suffix=" MB" onChange={(value) => onConfigChange({ workflowCacheEntryMemoryMb: value })} />
+          <RangeControl label="Memory / Worker" value={config.memoryCapacityMb} min={64} max={1024} step={16} suffix=" MB" onChange={(value) => onConfigChange({ memoryCapacityMb: value })} />
           <div className="task-resource-panel">
             <div className="task-resource-header">
               <span className="task-resource-title">Task resource profiles</span>
@@ -327,7 +373,7 @@ export function Controls({
                   I/O-bound
                 </label>
               </div>
-              <RangeControl label="Demand" value={workflowTaskDemand} min={0.05} max={1} step={0.05} suffix={workflowTaskResourceProfile === 'cpu' ? ' CPU' : ' throughput'} onChange={updateWorkflowTaskDemand} />
+              <RangeControl label="Demand" value={workflowTaskDemand} min={0.01} max={1} step={0.01} suffix={workflowTaskResourceProfile === 'cpu' ? ' CPU' : ' throughput'} onChange={updateWorkflowTaskDemand} />
             </div>
             <div className="task-profile-group">
               <span className="task-profile-name">Activity Task</span>
@@ -341,7 +387,7 @@ export function Controls({
                   I/O-bound
                 </label>
               </div>
-              <RangeControl label="Demand" value={activityTaskDemand} min={0.05} max={1} step={0.05} suffix={activityTaskResourceProfile === 'cpu' ? ' CPU' : ' throughput'} onChange={updateActivityTaskDemand} />
+              <RangeControl label="Demand" value={activityTaskDemand} min={0.01} max={1} step={0.01} suffix={activityTaskResourceProfile === 'cpu' ? ' CPU' : ' throughput'} onChange={updateActivityTaskDemand} />
             </div>
           </div>
         </fieldset>

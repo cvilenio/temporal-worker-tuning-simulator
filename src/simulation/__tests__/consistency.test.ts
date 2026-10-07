@@ -21,7 +21,7 @@ describe('Task state consistency', () => {
       const tasks = new Map(snapshot.tasks.map((task) => [task.id, task]))
 
       for (const poller of [...snapshot.workflowPollers, ...snapshot.activityPollers]) {
-        if (poller.state === 'polling') {
+        if (poller.state === 'long-polling') {
           expect(poller.taskId).toBeUndefined()
         } else {
           expect(tasks.get(poller.taskId!)?.state).toBe('acquired')
@@ -83,7 +83,10 @@ describe('Task state consistency', () => {
       cpuCapacity: 8,
     })
     simulation.startWorkflows(4)
-    runFor(simulation, 5)
+    for (let tick = 0; tick < 200; tick += 1) {
+      simulation.step()
+      if (simulation.getSnapshot().activityQueue.length === 4) break
+    }
     const snapshot = simulation.getSnapshot()
     expect(snapshot.activityQueue).toHaveLength(4)
     expect(snapshot.activitySlots.every((slot) => !slot.taskId)).toBe(true)

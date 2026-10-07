@@ -14,12 +14,12 @@ const CLIENT_CORE_POINT: Point = { x: 230, y: 225 }
 export const workflowLaneY = 236
 export const returnLaneY = 325
 export const activityLaneY = 424
-export const maxVisibleQueueTasks = 24
+export const maxVisibleQueueTasks = 20
 
 const QUEUE_INGRESS_X = 440
 const QUEUE_STORAGE_EGRESS_X = 680
 const QUEUE_EGRESS_X = 705
-const QUEUE_STORAGE_PITCH = 10.5
+const QUEUE_STORAGE_PITCH = 12.5
 
 const RETURN_CORE_POINT: Point = {
   x: serviceCoreBounds.x + serviceCoreBounds.width - 20,

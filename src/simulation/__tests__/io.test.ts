@@ -62,7 +62,7 @@ describe('shared I/O throughput', () => {
     expect(snapshot.cpuUtilization).toBe(0)
     expect(snapshot.ioUtilization).toBe(1)
     expect(snapshot.ioDemand).toBe(1)
-    expect(snapshot.memoryUtilization).toBe(0)
+    expect(snapshot.memoryUtilization).toBeGreaterThan(0)
   })
 
   it('keeps I/O execution at its base duration below capacity and slows it under contention', () => {

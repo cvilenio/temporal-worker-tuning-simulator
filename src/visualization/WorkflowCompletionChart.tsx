@@ -1,5 +1,6 @@
 import type { MetricSample } from '../simulation'
-import { ThrottleBands, ThrottleLegend } from './ThrottleBands'
+import { AutoPauseLegend, AutoPauseMarkers } from './ChartLifecycleMarkers'
+import { ReplayBands, ReplayLegend, ThrottleBands, ThrottleLegend } from './ThrottleBands'
 
 const WIDTH = 1200
 const HEIGHT = 180
@@ -22,10 +23,12 @@ export function WorkflowCompletionChart({
   simulatedTime,
   currentValue,
   samples,
+  autoPauseTimes = [],
 }: {
   simulatedTime: number
   currentValue: number
   samples: MetricSample[]
+  autoPauseTimes?: number[]
 }) {
   const maxTime = Math.max(simulatedTime, 0.25)
   const observedMax = Math.max(0, ...samples.map((sample) => sample.value))
@@ -42,6 +45,8 @@ export function WorkflowCompletionChart({
         <div className="chart-status">
           <strong>{currentValue.toFixed(2)} Workflows/s</strong>
           <ThrottleLegend />
+          <ReplayLegend />
+          <AutoPauseLegend />
         </div>
       </div>
       <svg
@@ -53,6 +58,7 @@ export function WorkflowCompletionChart({
         data-sample-count={samples.length}
       >
         <ThrottleBands samples={samples} maxTime={maxTime} left={LEFT} top={TOP} plotWidth={PLOT_WIDTH} plotHeight={PLOT_HEIGHT} />
+        <ReplayBands samples={samples} maxTime={maxTime} left={LEFT} top={TOP} plotWidth={PLOT_WIDTH} plotHeight={PLOT_HEIGHT} />
         {[0, 0.5, 1].map((fraction) => {
           const y = TOP + PLOT_HEIGHT - fraction * PLOT_HEIGHT
           return <line key={fraction} x1={LEFT} y1={y} x2={WIDTH - RIGHT} y2={y} className="chart-grid-line" />
@@ -60,6 +66,7 @@ export function WorkflowCompletionChart({
         <line x1={LEFT} y1={TOP} x2={LEFT} y2={TOP + PLOT_HEIGHT} className="chart-axis" />
         <line x1={LEFT} y1={TOP + PLOT_HEIGHT} x2={WIDTH - RIGHT} y2={TOP + PLOT_HEIGHT} className="chart-axis" />
         <path d={linePath(samples, maxTime, maxValue)} className="chart-line workflow-completion-line" data-series="workflow-completion-rate" />
+        <AutoPauseMarkers timestamps={autoPauseTimes} maxTime={maxTime} left={LEFT} top={TOP} plotWidth={PLOT_WIDTH} plotHeight={PLOT_HEIGHT} />
         <text x={LEFT - 10} y={TOP + 4} textAnchor="end" className="chart-label">{maxValue.toFixed(2)}/s</text>
         <text x={LEFT - 10} y={TOP + PLOT_HEIGHT + 4} textAnchor="end" className="chart-label">0/s</text>
         <text x={LEFT} y={HEIGHT - 9} textAnchor="middle" className="chart-label">0s</text>

@@ -52,7 +52,7 @@ export function ResultLayer({
               points={`${x},${y - 5} ${x + 5},${y} ${x},${y + 5} ${x - 5},${y}`}
               className="result-pulse"
             >
-              <title>Completion from {plan.taskId}</title>
+              <title>{`Completion from ${plan.taskId}`}</title>
             </polygon>
           </g>
         )

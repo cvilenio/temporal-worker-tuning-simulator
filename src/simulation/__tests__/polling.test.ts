@@ -25,7 +25,7 @@ describe('Poller capacity', () => {
     const firstWave = simulation.getSnapshot()
     expect(firstWave.activityQueue).toHaveLength(2)
     expect(firstWave.tasks.filter((task) => task.type === 'activity' && task.state === 'acquired')).toHaveLength(2)
-    expect(firstWave.activityPollers.filter((poller) => poller.state === 'dispatching')).toHaveLength(2)
+    expect(firstWave.activityPollers.filter((poller) => poller.state === 'task-received')).toHaveLength(2)
     expect(firstWave.activitySlots.filter((slot) => slot.state === 'reserved')).toHaveLength(2)
   })
 
@@ -62,13 +62,13 @@ describe('Poller capacity', () => {
 
     simulation.updateConfig({ workflowSlots: 4 })
     simulation.step(TICK_SECONDS)
-    expect(simulation.getSnapshot().workflowPollers.filter((poller) => poller.state === 'dispatching')).toHaveLength(1)
+    expect(simulation.getSnapshot().workflowPollers.filter((poller) => poller.state === 'task-received')).toHaveLength(1)
 
     simulation.updateConfig({ workflowPollers: 2 })
     simulation.step(TICK_SECONDS)
     const scaled = simulation.getSnapshot()
     expect(scaled.workflowQueue).toHaveLength(2)
-    expect(scaled.workflowPollers.filter((poller) => poller.state === 'dispatching')).toHaveLength(2)
+    expect(scaled.workflowPollers.filter((poller) => poller.state === 'task-received')).toHaveLength(2)
     expect(scaled.workflowSlots.filter((slot) => slot.state === 'reserved')).toHaveLength(2)
   })
 

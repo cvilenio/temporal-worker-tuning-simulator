@@ -1,11 +1,19 @@
 import {
   ACTIVITY_CPU_BASE_DURATION_SECONDS,
   ACTIVITY_IO_BASE_DURATION_SECONDS,
-  ACTIVITY_MAX_CPU_DEMAND,
+  ACTIVE_TASK_MEMORY_MB,
+  BASE_WORKER_MEMORY_MB,
+  CACHED_WORKFLOW_MEMORY_MB,
   CPU_CONTENTION_KNEE,
   CPU_CAPACITY_OPTIONS,
   CPU_MAX_CONTENTION_SPEED_LOSS,
   COMPLETION_RETURN_SECONDS,
+  DEFAULT_MEMORY_CAPACITY_MB,
+  DEFAULT_ACTIVITY_TASK_CPU_DEMAND,
+  DEFAULT_ACTIVITY_TASK_IO_DEMAND,
+  DEFAULT_WORKFLOW_TASK_CPU_DEMAND,
+  DEFAULT_WORKFLOW_TASK_IO_DEMAND,
+  DEFAULT_WORKFLOW_CACHE_CAPACITY,
   IO_CAPACITY,
   IO_CONTENTION_KNEE,
   IO_MAX_CONTENTION_SPEED_LOSS,
@@ -15,12 +23,15 @@ import {
   POLL_DISPATCH_SECONDS,
   QUEUE_ADMISSION_SECONDS,
   QUEUE_DWELL_SECONDS,
+  REPLAY_CPU_DEMAND,
+  REPLAY_CPU_PER_HISTORY_UNIT,
+  SINGLE_WORKER_ID,
+  STICKY_SCHEDULE_TO_START_TIMEOUT_SECONDS,
   SLOT_DISPATCH_SECONDS,
   TASK_ENQUEUE_STAGGER_SECONDS,
   TICK_SECONDS,
   WORKFLOW_CPU_BASE_DURATION_SECONDS,
   WORKFLOW_IO_BASE_DURATION_SECONDS,
-  WORKFLOW_MAX_CPU_DEMAND,
   WORKFLOW_START_TRANSIT_SECONDS,
   WORKFLOW_TASK_ISSUE_DELAY_SECONDS,
   WORKFLOW_TASK_ISSUE_JITTER_SECONDS,
@@ -38,7 +49,9 @@ import type {
   TaskType,
   TaskThroughputSample,
   WorkflowExecution,
+  WorkflowCacheEntry,
   WorkflowTask,
+  WorkerSnapshot,
 } from './types'
 import { resourceProgressScale } from './resources'
 
@@ -46,22 +59,26 @@ export const defaultConfig: SimulationConfig = {
   workflowStartRate: 0.1,
   activitiesPerWorkflow: 3,
   activityFanout: 3,
-  workflowPollers: 2,
+  workerCount: 1,
+  workflowPollers: 1,
   activityPollers: 2,
   workflowSlots: 2,
-  activitySlots: 2,
+  activitySlots: 4,
   cpuCapacity: 1,
+  workflowCacheCapacity: DEFAULT_WORKFLOW_CACHE_CAPACITY,
+  workflowCacheEntryMemoryMb: CACHED_WORKFLOW_MEMORY_MB,
+  memoryCapacityMb: DEFAULT_MEMORY_CAPACITY_MB,
   workflowTaskResourceProfile: 'cpu',
   activityTaskResourceProfile: 'cpu',
   taskResourceProfilesLocked: true,
-  workflowTaskCpuDemand: WORKFLOW_MAX_CPU_DEMAND,
-  activityTaskCpuDemand: ACTIVITY_MAX_CPU_DEMAND,
-  workflowTaskIoDemand: WORKFLOW_MAX_CPU_DEMAND,
-  activityTaskIoDemand: WORKFLOW_MAX_CPU_DEMAND,
+  workflowTaskCpuDemand: DEFAULT_WORKFLOW_TASK_CPU_DEMAND,
+  activityTaskCpuDemand: DEFAULT_ACTIVITY_TASK_CPU_DEMAND,
+  workflowTaskIoDemand: DEFAULT_WORKFLOW_TASK_IO_DEMAND,
+  activityTaskIoDemand: DEFAULT_ACTIVITY_TASK_IO_DEMAND,
 }
 
 function normalizeConfig(config: SimulationConfig): SimulationConfig {
-  const cpuDemand = (value: number) => Math.max(0.05, Math.min(1, Math.round(value * 20) / 20))
+  const cpuDemand = (value: number) => Math.max(0.01, Math.min(1, Math.round(value * 100) / 100))
   const cpuCapacity = CPU_CAPACITY_OPTIONS.reduce((nearest, option) =>
     Math.abs(option - config.cpuCapacity) < Math.abs(nearest - config.cpuCapacity) ? option : nearest,
   )
@@ -72,6 +89,10 @@ function normalizeConfig(config: SimulationConfig): SimulationConfig {
   return {
     ...config,
     cpuCapacity,
+    workerCount: Math.max(1, Math.min(4, Math.round(config.workerCount))),
+    workflowCacheCapacity: Math.max(0, Math.min(50, Math.round(config.workflowCacheCapacity))),
+    workflowCacheEntryMemoryMb: Math.max(1, Math.min(16, Math.round(config.workflowCacheEntryMemoryMb))),
+    memoryCapacityMb: Math.max(64, Math.min(1_024, Math.round(config.memoryCapacityMb / 16) * 16)),
     workflowTaskResourceProfile,
     activityTaskResourceProfile,
     taskResourceProfilesLocked: Boolean(config.taskResourceProfilesLocked),
@@ -97,6 +118,22 @@ interface TaskCompletionRecord {
   type: TaskType
 }
 
+interface InternalWorkflowCacheEntry extends WorkflowCacheEntry {
+  lastUsedOrder: number
+}
+
+interface WorkerRuntime {
+  id: string
+  displayId: string
+  status: 'active' | 'draining'
+  cpuUtilization: number
+  cpuDemand: number
+  cpuThrottled: boolean
+  ioUtilization: number
+  ioDemand: number
+  ioThrottled: boolean
+}
+
 export class Simulation {
   private config: SimulationConfig
   private readonly seed: number
@@ -114,10 +151,20 @@ export class Simulation {
   private activityPollers: Poller[] = []
   private workflowSlots: Slot[] = []
   private activitySlots: Slot[] = []
+  private workflowCache = new Map<string, InternalWorkflowCacheEntry>()
+  private workers = new Map<string, WorkerRuntime>()
+  private workflowRoundRobinIndex = 0
+  private activityRoundRobinIndex = 0
+  private cacheAccessSequence = 0
+  private cacheHits = 0
+  private cacheMisses = 0
+  private cacheEvictions = 0
+  private replaysStarted = 0
+  private replayCpuSeconds = 0
   private events: SemanticEvent[] = []
   private completions: CompletionRecord[] = []
   private slotResidences: SlotResidenceRecord[] = []
-  private slotResidenceHistory: MetricSample[] = [{ timestamp: 0, value: 0, throttled: false }]
+  private slotResidenceHistory: MetricSample[] = [{ timestamp: 0, value: 0, throttled: false, replaying: false }]
   private taskCompletions: TaskCompletionRecord[] = []
   private taskThroughputHistory: TaskThroughputSample[] = [{
     timestamp: 0,
@@ -125,8 +172,9 @@ export class Simulation {
     workflow: 0,
     activity: 0,
     throttled: false,
+    replaying: false,
   }]
-  private workflowCompletionHistory: MetricSample[] = [{ timestamp: 0, value: 0, throttled: false }]
+  private workflowCompletionHistory: MetricSample[] = [{ timestamp: 0, value: 0, throttled: false, replaying: false }]
   private cpuUtilization = 0
   private cpuDemand = 0
   private cpuThrottled = false
@@ -134,6 +182,7 @@ export class Simulation {
   private ioDemand = 0
   private ioThrottled = false
   private throttledSinceLastMetricSample = false
+  private replayingSinceLastMetricSample = false
 
   constructor(config: Partial<SimulationConfig> = {}, seed = 1) {
     this.config = normalizeConfig({ ...defaultConfig, ...config })
@@ -159,6 +208,9 @@ export class Simulation {
       merged.activityTaskResourceProfile = sharedProfile
     }
     this.config = normalizeConfig(merged)
+    for (const entry of this.workflowCache.values()) {
+      entry.memoryMb = this.config.workflowCacheEntryMemoryMb
+    }
     if (this.config.workflowTaskResourceProfile !== previousWorkflowProfile) {
       this.reprofilePendingTasks('workflow', this.config.workflowTaskResourceProfile)
     }
@@ -166,6 +218,7 @@ export class Simulation {
       this.reprofilePendingTasks('activity', this.config.activityTaskResourceProfile)
     }
     this.syncCapacity()
+    this.enforceCacheLimits()
   }
 
   startWorkflow(): void {
@@ -192,10 +245,10 @@ export class Simulation {
     this.events = []
     this.completions = []
     this.slotResidences = []
-    this.slotResidenceHistory = [{ timestamp: 0, value: 0, throttled: false }]
+    this.slotResidenceHistory = [{ timestamp: 0, value: 0, throttled: false, replaying: false }]
     this.taskCompletions = []
-    this.taskThroughputHistory = [{ timestamp: 0, total: 0, workflow: 0, activity: 0, throttled: false }]
-    this.workflowCompletionHistory = [{ timestamp: 0, value: 0, throttled: false }]
+    this.taskThroughputHistory = [{ timestamp: 0, total: 0, workflow: 0, activity: 0, throttled: false, replaying: false }]
+    this.workflowCompletionHistory = [{ timestamp: 0, value: 0, throttled: false, replaying: false }]
     this.cpuUtilization = 0
     this.cpuDemand = 0
     this.cpuThrottled = false
@@ -203,11 +256,22 @@ export class Simulation {
     this.ioDemand = 0
     this.ioThrottled = false
     this.throttledSinceLastMetricSample = false
+    this.replayingSinceLastMetricSample = false
     this.config = config
     this.workflowPollers = []
     this.activityPollers = []
     this.workflowSlots = []
     this.activitySlots = []
+    this.workflowCache.clear()
+    this.workers.clear()
+    this.workflowRoundRobinIndex = 0
+    this.activityRoundRobinIndex = 0
+    this.cacheAccessSequence = 0
+    this.cacheHits = 0
+    this.cacheMisses = 0
+    this.cacheEvictions = 0
+    this.replaysStarted = 0
+    this.replayCpuSeconds = 0
     this.syncCapacity()
   }
 
@@ -224,6 +288,9 @@ export class Simulation {
     const recent = this.completions.filter((record) => record.timestamp > cutoff)
     const slotResidenceSeconds = this.currentSlotResidenceSeconds()
     const taskThroughput = this.currentTaskThroughput()
+    const memoryUsedMb = this.currentMemoryUsedMb()
+    const cacheRequests = this.cacheHits + this.cacheMisses
+    const workers = this.workerSnapshots()
     return {
       simulatedTime: this.time,
       config: { ...this.config },
@@ -231,6 +298,7 @@ export class Simulation {
       tasks: activeTasks.map((task) => ({ ...task })),
       workflowQueue: [...this.workflowQueue],
       activityQueue: [...this.activityQueue],
+      workers,
       workflowPollers: this.workflowPollers.map((poller) => ({ ...poller })),
       activityPollers: this.activityPollers.map((poller) => ({ ...poller })),
       workflowSlots: this.workflowSlots.map((slot) => ({ ...slot })),
@@ -238,10 +306,22 @@ export class Simulation {
       cpuUtilization: this.cpuUtilization,
       cpuDemand: this.cpuDemand,
       cpuThrottled: this.cpuThrottled,
-      memoryUtilization: 0,
+      memoryUtilization: Math.min(memoryUsedMb / (this.config.memoryCapacityMb * Math.max(1, workers.length)), 1),
+      memoryUsedMb,
       ioUtilization: this.ioUtilization,
       ioDemand: this.ioDemand,
       ioThrottled: this.ioThrottled,
+      workflowCache: this.cacheEntries(),
+      cacheMetrics: {
+        cacheSize: this.workflowCache.size,
+        cacheCapacity: this.config.workflowCacheCapacity * workers.filter((worker) => worker.status === 'active').length,
+        cacheHits: this.cacheHits,
+        cacheMisses: this.cacheMisses,
+        cacheEvictions: this.cacheEvictions,
+        cacheHitRate: cacheRequests === 0 ? 0 : this.cacheHits / cacheRequests,
+        replaysStarted: this.replaysStarted,
+        replayCpuSeconds: this.replayCpuSeconds,
+      },
       metrics: {
         activityThroughput: recent.filter((record) => record.type === 'activity').length / METRIC_WINDOW_SECONDS,
         totalTaskThroughput: taskThroughput.total,
@@ -272,11 +352,14 @@ export class Simulation {
     this.advanceDispatches('workflow')
     this.advanceDispatches('activity')
     this.advanceCompletionReturns()
+    this.advanceStickyFallbacks()
     this.trimRetiredPollers()
     this.dispatch('workflow')
     this.dispatch('activity')
     this.allocateResources()
+    this.enforceCacheLimits()
     this.removeDrainedSlots()
+    this.removeDrainedWorkers()
     this.completions = this.completions.filter(
       (record) => record.timestamp > this.time - METRIC_WINDOW_SECONDS,
     )
@@ -290,22 +373,27 @@ export class Simulation {
     const sampleEveryTicks = Math.round(METRIC_SAMPLE_SECONDS / TICK_SECONDS)
     if (tickNumber % sampleEveryTicks === 0) {
       const throttled = this.throttledSinceLastMetricSample
+      const replaying = this.replayingSinceLastMetricSample
       this.slotResidenceHistory.push({
         timestamp: this.time,
         value: this.currentSlotResidenceSeconds(),
         throttled,
+        replaying,
       })
       this.taskThroughputHistory.push({
         timestamp: this.time,
         ...this.currentTaskThroughput(),
         throttled,
+        replaying,
       })
       this.workflowCompletionHistory.push({
         timestamp: this.time,
         value: this.currentWorkflowCompletionRate(),
         throttled,
+        replaying,
       })
       this.throttledSinceLastMetricSample = false
+      this.replayingSinceLastMetricSample = false
     }
   }
 
@@ -330,11 +418,17 @@ export class Simulation {
   }
 
   private trimPollers(pollers: Poller[], target: number): Poller[] {
-    if (pollers.length <= target) return pollers
-    const busy = pollers.filter((poller) => poller.state === 'dispatching')
-    const idle = pollers.filter((poller) => poller.state === 'polling')
-    return [...busy, ...idle.slice(0, Math.max(0, target - busy.length))]
-      .sort((a, b) => a.id.localeCompare(b.id, undefined, { numeric: true }))
+    return [...this.workers.values()].flatMap((worker) => {
+      const workerPollers = pollers.filter((poller) => poller.workerId === worker.id)
+      if (worker.status === 'draining') {
+        return workerPollers.filter((poller) => poller.state !== 'long-polling')
+      }
+      const busy = workerPollers.filter((poller) => poller.state !== 'long-polling')
+      const idle = workerPollers.filter((poller) => poller.state === 'long-polling')
+      return [...busy, ...idle.slice(0, Math.max(0, target - busy.length))]
+    }).sort((a, b) =>
+      a.workerId.localeCompare(b.workerId, undefined, { numeric: true })
+      || a.id.localeCompare(b.id, undefined, { numeric: true }))
   }
 
   private generateArrivals(): void {
@@ -350,6 +444,7 @@ export class Simulation {
     const id = `workflow-${ordinal}`
     const workflow: WorkflowExecution = {
       id,
+      displayId: `W${ordinal}`,
       state: 'initial',
       createdAt: this.time,
       initialTaskIssueJitter: this.workflowIssueJitter(ordinal),
@@ -360,6 +455,9 @@ export class Simulation {
       pendingWorkflowEvents: 1,
       workflowTaskOutstanding: false,
       finalWorkflowTaskScheduled: false,
+      historyUnits: 1,
+      cachedWorkerId: null,
+      lastCacheAccessAt: null,
     }
     this.emit('WORKFLOW_START_REQUESTED', { workflowId: id })
     this.workflows.set(id, workflow)
@@ -404,6 +502,12 @@ export class Simulation {
       ioWorkRemaining: resourceProfile === 'io' ? resourceWork : 0,
       maxIoDemand: resourceProfile === 'io' ? resourceDemand : 0,
       resourceProfile,
+      executionPhase: 'decision',
+      replayCpuWorkRemaining: 0,
+      replayCpuWorkTotal: 0,
+      routingState: source && workflow.cachedWorkerId ? 'sticky-wait' : 'shared-queue',
+      preferredWorkerId: source && workflow.cachedWorkerId ? workflow.cachedWorkerId : undefined,
+      stickyWaitStartedAt: source && workflow.cachedWorkerId ? this.time : undefined,
       sourceSlotId: source?.assignedSlotId,
       createdFrom: source ? 'activity-slot' : 'workflow',
     }
@@ -414,6 +518,8 @@ export class Simulation {
       taskId: task.id,
       sourceTaskId: source?.id,
       sourceSlotId: source?.assignedSlotId,
+      preferredWorkerId: task.preferredWorkerId,
+      routingState: task.routingState,
     })
   }
 
@@ -438,7 +544,7 @@ export class Simulation {
   private advanceDispatches(type: TaskType): void {
     const pollers = this.getPollers(type)
     for (const poller of pollers) {
-      if (poller.state !== 'dispatching' || !poller.taskId) continue
+      if (poller.state !== 'task-received' || !poller.taskId) continue
       const task = this.tasks.get(poller.taskId)
       if (!task) continue
       task.dispatchRemaining = this.round(task.dispatchRemaining - TICK_SECONDS)
@@ -446,13 +552,14 @@ export class Simulation {
       task.state = 'dispatching'
       task.slotDispatchStartedAt = this.time
       task.slotDispatchRemaining = SLOT_DISPATCH_SECONDS
-      poller.state = 'polling'
+      poller.state = 'long-polling'
       poller.taskId = undefined
       this.emit(type === 'workflow' ? 'WORKFLOW_TASK_SLOT_DISPATCH_STARTED' : 'ACTIVITY_TASK_SLOT_DISPATCH_STARTED', {
         workflowId: task.workflowId,
         taskId: task.id,
         pollerId: task.assignedPollerId,
         slotId: task.assignedSlotId,
+        workerId: task.assignedWorkerId,
       })
     }
   }
@@ -470,32 +577,37 @@ export class Simulation {
         workflowId: task.workflowId,
         taskId: task.id,
         slotId: task.assignedSlotId,
+        workerId: task.assignedWorkerId,
       })
+      if (task.type === 'workflow') this.prepareWorkflowTaskExecution(task)
     }
   }
 
   private dispatch(type: TaskType): void {
     const queue = type === 'workflow' ? this.workflowQueue : this.activityQueue
-    const availablePollers = this.getPollers(type).filter((poller) => poller.state === 'polling')
-    const availableSlots = this.getSlots(type).filter((slot) => slot.state === 'available')
-    const eligibleCount = queue.findIndex((taskId) => {
-      const task = this.tasks.get(taskId)!
-      return (task.pollEligibleAt ?? Infinity) > this.time
-    })
-    const eligiblePrefix = eligibleCount === -1 ? queue.length : eligibleCount
-    const count = Math.min(eligiblePrefix, availablePollers.length, availableSlots.length)
-    for (let index = 0; index < count; index += 1) {
-      const taskId = queue.shift()!
-      const task = this.tasks.get(taskId)!
-      const poller = availablePollers[index]
-      const slot = availableSlots[index]
+    let dispatched = true
+    while (dispatched) {
+      dispatched = false
+      for (let queueIndex = 0; queueIndex < queue.length; queueIndex += 1) {
+        const task = this.tasks.get(queue[queueIndex])!
+        if ((task.pollEligibleAt ?? Infinity) > this.time) continue
+        const worker = this.selectWorkerForTask(task)
+        if (!worker) continue
+        const poller = this.getPollers(type).find((candidate) =>
+          candidate.workerId === worker.id && candidate.state === 'long-polling',
+        )!
+        const slot = this.getSlots(type).find((candidate) =>
+          candidate.workerId === worker.id && candidate.state === 'available',
+        )!
+        queue.splice(queueIndex, 1)
       task.state = 'acquired'
       task.dispatchStartedAt = this.time
       task.dispatchRemaining = POLL_DISPATCH_SECONDS
       task.assignedPollerId = poller.id
       task.assignedSlotId = slot.id
-      task.dispatchBatchIndex = index
-      poller.state = 'dispatching'
+        task.assignedWorkerId = worker.id
+        task.dispatchBatchIndex = queueIndex
+      poller.state = 'task-received'
       poller.taskId = task.id
       slot.state = 'reserved'
       slot.taskId = task.id
@@ -504,45 +616,135 @@ export class Simulation {
         taskId: task.id,
         pollerId: poller.id,
         slotId: slot.id,
+          workerId: worker.id,
+      })
+        dispatched = true
+        break
+      }
+    }
+  }
+
+  private selectWorkerForTask(task: SimulationTask): WorkerRuntime | undefined {
+    const type = task.type
+    const eligible = [...this.workers.values()]
+      .filter((worker) => worker.status === 'active')
+      .filter((worker) => this.getPollers(type).some((poller) =>
+        poller.workerId === worker.id && poller.state === 'long-polling',
+      ))
+      .filter((worker) => this.getSlots(type).some((slot) =>
+        slot.workerId === worker.id && slot.state === 'available',
+      ))
+      .sort((left, right) => left.id.localeCompare(right.id, undefined, { numeric: true }))
+    if (task.type === 'workflow' && task.routingState === 'sticky-wait') {
+      return eligible.find((worker) => worker.id === task.preferredWorkerId)
+    }
+    if (eligible.length === 0) return undefined
+    const pointer = type === 'workflow' ? this.workflowRoundRobinIndex : this.activityRoundRobinIndex
+    const activeIds = [...this.workers.values()]
+      .filter((worker) => worker.status === 'active')
+      .sort((left, right) => left.id.localeCompare(right.id, undefined, { numeric: true }))
+      .map((worker) => worker.id)
+    for (let offset = 0; offset < activeIds.length; offset += 1) {
+      const index = (pointer + offset) % activeIds.length
+      const worker = eligible.find((candidate) => candidate.id === activeIds[index])
+      if (!worker) continue
+      if (type === 'workflow') this.workflowRoundRobinIndex = (index + 1) % activeIds.length
+      else this.activityRoundRobinIndex = (index + 1) % activeIds.length
+      return worker
+    }
+    return undefined
+  }
+
+  private advanceStickyFallbacks(): void {
+    for (const task of this.tasks.values()) {
+      if (task.type !== 'workflow' || task.state !== 'queued' || task.routingState !== 'sticky-wait') continue
+      if (task.stickyWaitStartedAt === undefined) continue
+      if (this.time - task.stickyWaitStartedAt < STICKY_SCHEDULE_TO_START_TIMEOUT_SECONDS) continue
+      const previousWorkerId = task.preferredWorkerId
+      task.routingState = 'shared-fallback'
+      task.stickyFallbackAt = this.time
+      task.preferredWorkerId = undefined
+      this.invalidateWorkflowCache(task.workflowId, 'STICKY_FALLBACK')
+      this.emit('STICKY_FALLBACK', {
+        workflowId: task.workflowId,
+        taskId: task.id,
+        workerId: previousWorkerId,
+        routingState: task.routingState,
       })
     }
   }
 
   private allocateResources(): void {
     const running = [...this.tasks.values()].filter((task) => task.state === 'running')
-    const cpuActive = running.filter((task) => (task.cpuWorkRemaining ?? 0) > 0)
-    const desiredCpu = cpuActive.reduce((sum, task) => sum + task.maxCpuDemand, 0)
-    this.cpuDemand = desiredCpu
-    this.cpuUtilization = Math.min(desiredCpu / this.config.cpuCapacity, 1)
-    const cpuScale = resourceProgressScale(desiredCpu, this.config.cpuCapacity, {
-      knee: CPU_CONTENTION_KNEE,
-      maxSpeedLoss: CPU_MAX_CONTENTION_SPEED_LOSS,
-    })
-    this.cpuThrottled = desiredCpu > 0 && cpuScale < 1
-    for (const task of cpuActive) {
-      task.cpuWorkRemaining = this.round(
-        task.cpuWorkRemaining - task.maxCpuDemand * cpuScale * TICK_SECONDS,
-      )
-    }
+    const replayingAtTickStart = new Set(
+      running.filter((task) => task.replayCpuWorkRemaining > 0).map((task) => task.id),
+    )
+    this.replayingSinceLastMetricSample ||= replayingAtTickStart.size > 0
+    const cpuDemandFor = (task: SimulationTask) => task.replayCpuWorkRemaining > 0
+      ? REPLAY_CPU_DEMAND
+      : task.maxCpuDemand
+    for (const worker of this.workers.values()) {
+      const workerRunning = running.filter((task) => task.assignedWorkerId === worker.id)
+      const cpuActive = workerRunning.filter((task) => task.replayCpuWorkRemaining > 0 || task.cpuWorkRemaining > 0)
+      const desiredCpu = cpuActive.reduce((sum, task) => sum + cpuDemandFor(task), 0)
+      worker.cpuDemand = desiredCpu
+      worker.cpuUtilization = Math.min(desiredCpu / this.config.cpuCapacity, 1)
+      const cpuScale = resourceProgressScale(desiredCpu, this.config.cpuCapacity, {
+        knee: CPU_CONTENTION_KNEE,
+        maxSpeedLoss: CPU_MAX_CONTENTION_SPEED_LOSS,
+      })
+      worker.cpuThrottled = desiredCpu > 0 && cpuScale < 1
+      for (const task of cpuActive) {
+        const workDone = cpuDemandFor(task) * cpuScale * TICK_SECONDS
+        if (task.replayCpuWorkRemaining > 0) {
+          task.replayCpuWorkRemaining = this.round(task.replayCpuWorkRemaining - workDone)
+          if (task.replayCpuWorkRemaining <= 0) {
+            task.replayCpuWorkRemaining = 0
+            task.executionPhase = 'decision'
+            this.emit('REPLAY_COMPLETED', {
+              workflowId: task.workflowId,
+              taskId: task.id,
+              workerId: worker.id,
+              replayCpuSeconds: task.replayCpuWorkTotal,
+            })
+            if (task.type === 'workflow' && task.phase !== 'final') {
+              const workflow = this.workflows.get(task.workflowId)!
+              this.cacheWorkflow(workflow, worker.id)
+            }
+          }
+        } else {
+          task.cpuWorkRemaining = this.round(task.cpuWorkRemaining - workDone)
+        }
+      }
 
-    const ioActive = running.filter((task) => (task.ioWorkRemaining ?? 0) > 0)
-    const desiredIo = ioActive.reduce((sum, task) => sum + task.maxIoDemand, 0)
-    this.ioDemand = desiredIo
-    this.ioUtilization = Math.min(desiredIo / IO_CAPACITY, 1)
-    const ioScale = resourceProgressScale(desiredIo, IO_CAPACITY, {
-      knee: IO_CONTENTION_KNEE,
-      maxSpeedLoss: IO_MAX_CONTENTION_SPEED_LOSS,
-    })
-    this.ioThrottled = desiredIo > 0 && ioScale < 1
-    this.throttledSinceLastMetricSample ||= this.cpuThrottled || this.ioThrottled
-    for (const task of ioActive) {
-      task.ioWorkRemaining = this.round(
-        task.ioWorkRemaining - task.maxIoDemand * ioScale * TICK_SECONDS,
+      const ioActive = workerRunning.filter((task) =>
+        !replayingAtTickStart.has(task.id) && task.replayCpuWorkRemaining <= 0 && task.ioWorkRemaining > 0,
       )
+      const desiredIo = ioActive.reduce((sum, task) => sum + task.maxIoDemand, 0)
+      worker.ioDemand = desiredIo
+      worker.ioUtilization = Math.min(desiredIo / IO_CAPACITY, 1)
+      const ioScale = resourceProgressScale(desiredIo, IO_CAPACITY, {
+        knee: IO_CONTENTION_KNEE,
+        maxSpeedLoss: IO_MAX_CONTENTION_SPEED_LOSS,
+      })
+      worker.ioThrottled = desiredIo > 0 && ioScale < 1
+      for (const task of ioActive) {
+        task.ioWorkRemaining = this.round(
+          task.ioWorkRemaining - task.maxIoDemand * ioScale * TICK_SECONDS,
+        )
+      }
     }
+    const workerCount = Math.max(1, this.workers.size)
+    this.cpuDemand = this.round([...this.workers.values()].reduce((sum, worker) => sum + worker.cpuDemand, 0))
+    this.cpuUtilization = Math.min(this.cpuDemand / (this.config.cpuCapacity * workerCount), 1)
+    this.cpuThrottled = [...this.workers.values()].some((worker) => worker.cpuThrottled)
+    this.ioDemand = this.round([...this.workers.values()].reduce((sum, worker) => sum + worker.ioDemand, 0))
+    this.ioUtilization = Math.min(this.ioDemand / (IO_CAPACITY * workerCount), 1)
+    this.ioThrottled = [...this.workers.values()].some((worker) => worker.ioThrottled)
+    this.throttledSinceLastMetricSample ||= this.cpuThrottled || this.ioThrottled
 
     for (const task of running) {
-      if ((task.cpuWorkRemaining ?? 0) <= 0 && (task.ioWorkRemaining ?? 0) <= 0) {
+      if (task.replayCpuWorkRemaining <= 0 && task.cpuWorkRemaining <= 0 && task.ioWorkRemaining <= 0) {
         this.beginCompletionReturn(task)
       }
     }
@@ -560,12 +762,22 @@ export class Simulation {
     const slot = this.getSlots(task.type).find((candidate) => candidate.id === task.assignedSlotId)
     if (slot) {
       slot.taskId = undefined
-      slot.state = slot.ordinal > this.slotLimit(task.type) ? 'draining' : 'available'
+      const worker = this.workers.get(slot.workerId)
+      slot.state = worker?.status === 'draining' || slot.ordinal > this.slotLimit(task.type)
+        ? 'draining'
+        : 'available'
     }
+    this.emit(task.type === 'workflow' ? 'WORKFLOW_TASK_RESPONSE_SENT' : 'ACTIVITY_TASK_RESPONSE_SENT', {
+      workflowId: task.workflowId,
+      taskId: task.id,
+      slotId: task.assignedSlotId,
+      workerId: task.assignedWorkerId,
+    })
     this.emit(task.type === 'workflow' ? 'WORKFLOW_TASK_RETURN_STARTED' : 'ACTIVITY_TASK_RETURN_STARTED', {
       workflowId: task.workflowId,
       taskId: task.id,
       slotId: task.assignedSlotId,
+      workerId: task.assignedWorkerId,
     })
   }
 
@@ -584,23 +796,31 @@ export class Simulation {
     this.taskCompletions.push({ timestamp: this.time, type: task.type })
     const workflow = this.workflows.get(task.workflowId)!
     if (task.type === 'workflow') {
+      workflow.historyUnits += 1
       workflow.workflowTaskOutstanding = false
       workflow.pendingWorkflowEvents = 0
       this.emit('WORKFLOW_TASK_COMPLETED', {
         workflowId: workflow.id,
         taskId: task.id,
         slotId: task.assignedSlotId,
+        workerId: task.assignedWorkerId,
       })
-      if (task.phase === 'final') this.completeWorkflow(workflow)
-      else this.scheduleActivityBatch(workflow, task)
+      if (task.phase === 'final') {
+        this.completeWorkflow(workflow)
+      } else {
+        this.cacheWorkflow(workflow, task.assignedWorkerId!)
+        this.scheduleActivityBatch(workflow, task)
+      }
     } else {
       workflow.activitiesCompleted += 1
+      workflow.historyUnits += 1
       workflow.pendingWorkflowEvents += 1
       this.completions.push({ timestamp: this.time, type: 'activity' })
       this.emit('ACTIVITY_TASK_COMPLETED', {
         workflowId: workflow.id,
         taskId: task.id,
         slotId: task.assignedSlotId,
+        workerId: task.assignedWorkerId,
       })
       const batchCompleted = workflow.activitiesCompleted === workflow.activitiesScheduled
       if (!batchCompleted) return
@@ -614,6 +834,180 @@ export class Simulation {
         this.ensureWorkflowTask(workflow, 'decision', task)
       }
     }
+  }
+
+  private prepareWorkflowTaskExecution(task: WorkflowTask): void {
+    const workflow = this.workflows.get(task.workflowId)!
+    const workerId = task.assignedWorkerId!
+    const entry = this.workflowCache.get(this.cacheKey(workerId, workflow.id))
+    if (entry) {
+      this.cacheHits += 1
+      this.touchCacheEntry(entry, workflow)
+      task.cacheOutcome = 'hit'
+      this.emit('CACHE_HIT', {
+        workflowId: workflow.id,
+        taskId: task.id,
+        workerId,
+      })
+      return
+    }
+
+    this.cacheMisses += 1
+    task.cacheOutcome = 'miss'
+    workflow.cachedWorkerId = null
+    workflow.lastCacheAccessAt = null
+    this.emit('CACHE_MISS', {
+      workflowId: workflow.id,
+      taskId: task.id,
+      workerId,
+    })
+    const replayCpuWork = this.round(Math.max(1, workflow.historyUnits) * REPLAY_CPU_PER_HISTORY_UNIT)
+    task.executionPhase = 'replay'
+    task.replayCpuWorkRemaining = replayCpuWork
+    task.replayCpuWorkTotal = replayCpuWork
+    this.replaysStarted += 1
+    this.replayCpuSeconds = this.round(this.replayCpuSeconds + replayCpuWork)
+    this.emit('REPLAY_STARTED', {
+      workflowId: workflow.id,
+      taskId: task.id,
+      workerId,
+      replayCpuSeconds: replayCpuWork,
+    })
+  }
+
+  private cacheWorkflow(workflow: WorkflowExecution, workerId: string): void {
+    if (this.config.workflowCacheCapacity === 0) {
+      this.removeCachedWorkflow(workflow.id)
+      return
+    }
+    for (const entry of this.workflowCache.values()) {
+      if (entry.workflowId === workflow.id && entry.workerId !== workerId) {
+        this.workflowCache.delete(this.cacheKey(entry.workerId, entry.workflowId))
+      }
+    }
+    const key = this.cacheKey(workerId, workflow.id)
+    const existing = this.workflowCache.get(key)
+    if (existing) {
+      this.touchCacheEntry(existing, workflow)
+      this.emit('CACHE_REFRESHED', {
+        workflowId: workflow.id,
+        workerId,
+      })
+      return
+    }
+
+    while (this.cacheEntries(workerId).length >= this.config.workflowCacheCapacity) {
+      if (!this.evictOldestCacheEntry('CAPACITY', workerId)) break
+    }
+    const entry: InternalWorkflowCacheEntry = {
+      workflowId: workflow.id,
+      displayId: workflow.displayId,
+      workerId,
+      insertedAt: this.time,
+      lastUsedAt: this.time,
+      lastUsedOrder: ++this.cacheAccessSequence,
+      memoryMb: this.config.workflowCacheEntryMemoryMb,
+    }
+    this.workflowCache.set(key, entry)
+    workflow.cachedWorkerId = workerId
+    workflow.lastCacheAccessAt = this.time
+    this.emit('CACHE_INSERTED', {
+      workflowId: workflow.id,
+      workerId,
+    })
+    this.enforceCacheLimits()
+  }
+
+  private touchCacheEntry(entry: InternalWorkflowCacheEntry, workflow: WorkflowExecution): void {
+    entry.lastUsedAt = this.time
+    entry.lastUsedOrder = ++this.cacheAccessSequence
+    workflow.cachedWorkerId = entry.workerId
+    workflow.lastCacheAccessAt = this.time
+  }
+
+  private enforceCacheLimits(): void {
+    for (const worker of this.workers.values()) {
+      while (this.cacheEntries(worker.id).length > this.config.workflowCacheCapacity) {
+        if (!this.evictOldestCacheEntry('CAPACITY', worker.id)) break
+      }
+      while (this.currentMemoryUsedMb(worker.id) > this.config.memoryCapacityMb && this.cacheEntries(worker.id).length > 0) {
+        if (!this.evictOldestCacheEntry('MEMORY_PRESSURE', worker.id)) break
+      }
+    }
+  }
+
+  private evictOldestCacheEntry(reason: 'CAPACITY' | 'MEMORY_PRESSURE', workerId?: string): boolean {
+    const oldest = [...this.workflowCache.values()]
+      .filter((entry) => workerId === undefined || entry.workerId === workerId)
+      .sort((left, right) => left.lastUsedOrder - right.lastUsedOrder || left.workflowId.localeCompare(right.workflowId))[0]
+    if (!oldest) return false
+    this.workflowCache.delete(this.cacheKey(oldest.workerId, oldest.workflowId))
+    const workflow = this.workflows.get(oldest.workflowId)
+    if (workflow?.cachedWorkerId === oldest.workerId) {
+      workflow.cachedWorkerId = null
+      workflow.lastCacheAccessAt = null
+    }
+    this.cacheEvictions += 1
+    this.emit('CACHE_EVICTED', {
+      workflowId: oldest.workflowId,
+      workerId: oldest.workerId,
+      reason,
+    })
+    return true
+  }
+
+  private removeCachedWorkflow(workflowId: string, reason?: 'WORKFLOW_COMPLETED'): void {
+    for (const entry of [...this.workflowCache.values()]) {
+      if (entry.workflowId === workflowId) {
+        this.workflowCache.delete(this.cacheKey(entry.workerId, entry.workflowId))
+        if (reason) {
+          this.emit('CACHE_EVICTED', { workflowId, workerId: entry.workerId, reason })
+        }
+      }
+    }
+    const workflow = this.workflows.get(workflowId)
+    if (workflow) {
+      workflow.cachedWorkerId = null
+      workflow.lastCacheAccessAt = null
+    }
+  }
+
+  private invalidateWorkflowCache(workflowId: string, reason: 'WORKER_REMOVED' | 'STICKY_FALLBACK'): void {
+    for (const entry of [...this.workflowCache.values()]) {
+      if (entry.workflowId !== workflowId) continue
+      this.workflowCache.delete(this.cacheKey(entry.workerId, entry.workflowId))
+      this.cacheEvictions += 1
+      this.emit('CACHE_EVICTED', { workflowId, workerId: entry.workerId, reason })
+    }
+    const workflow = this.workflows.get(workflowId)
+    if (workflow) {
+      workflow.cachedWorkerId = null
+      workflow.lastCacheAccessAt = null
+    }
+  }
+
+  private cacheKey(workerId: string, workflowId: string): string {
+    return `${workerId}:${workflowId}`
+  }
+
+  private cacheEntries(workerId?: string): WorkflowCacheEntry[] {
+    return [...this.workflowCache.values()]
+      .filter((entry) => workerId === undefined || entry.workerId === workerId)
+      .sort((left, right) => left.lastUsedOrder - right.lastUsedOrder)
+      .map(({ lastUsedOrder: _lastUsedOrder, ...entry }) => ({ ...entry }))
+  }
+
+  private currentMemoryUsedMb(workerId?: string): number {
+    if (workerId === undefined) {
+      return [...this.workers.keys()].reduce((sum, id) => sum + this.currentMemoryUsedMb(id), 0)
+    }
+    const activeWorkerTasks = [...this.tasks.values()].filter((task) =>
+      task.assignedWorkerId === workerId
+      && (task.state === 'acquired' || task.state === 'dispatching' || task.state === 'running'),
+    ).length
+    return BASE_WORKER_MEMORY_MB
+      + activeWorkerTasks * ACTIVE_TASK_MEMORY_MB
+      + this.cacheEntries(workerId).reduce((sum, entry) => sum + entry.memoryMb, 0)
   }
 
   private reprofilePendingTasks(type: TaskType, profile: 'cpu' | 'io'): void {
@@ -671,6 +1065,9 @@ export class Simulation {
         ioWorkRemaining: resourceProfile === 'io' ? resourceWork : 0,
         maxIoDemand: resourceProfile === 'io' ? resourceDemand : 0,
         resourceProfile,
+        executionPhase: 'activity',
+        replayCpuWorkRemaining: 0,
+        replayCpuWorkTotal: 0,
         sourceSlotId: sourceTask.assignedSlotId,
         createdFrom: 'workflow-slot',
       }
@@ -692,6 +1089,7 @@ export class Simulation {
   }
 
   private completeWorkflow(workflow: WorkflowExecution): void {
+    this.removeCachedWorkflow(workflow.id, 'WORKFLOW_COMPLETED')
     workflow.state = 'completed'
     workflow.completedAt = this.time
     this.completions.push({ timestamp: this.time, type: 'workflow' })
@@ -699,44 +1097,144 @@ export class Simulation {
   }
 
   private syncCapacity(): void {
-    this.workflowPollers = this.resizePollers(this.workflowPollers, 'workflow', this.config.workflowPollers)
-    this.activityPollers = this.resizePollers(this.activityPollers, 'activity', this.config.activityPollers)
-    this.workflowSlots = this.resizeSlots(this.workflowSlots, 'workflow', this.config.workflowSlots)
-    this.activitySlots = this.resizeSlots(this.activitySlots, 'activity', this.config.activitySlots)
-  }
-
-  private resizePollers(existing: Poller[], type: TaskType, target: number): Poller[] {
-    const busy = existing.filter((poller) => poller.state === 'dispatching')
-    const idle = existing.filter((poller) => poller.state === 'polling')
-    const keep = [...busy, ...idle].slice(0, Math.max(target, busy.length))
-    while (keep.length < target) {
-      keep.push({ id: `${type}-poller-${keep.length + 1}`, type, state: 'polling' })
-    }
-    return keep.sort((a, b) => a.id.localeCompare(b.id, undefined, { numeric: true }))
-  }
-
-  private resizeSlots(existing: Slot[], type: TaskType, target: number): Slot[] {
-    for (const slot of existing) {
-      if (slot.ordinal > target) {
-        slot.state = slot.taskId ? 'draining' : 'draining'
-      } else if (!slot.taskId) {
-        slot.state = 'available'
+    for (let ordinal = 1; ordinal <= this.config.workerCount; ordinal += 1) {
+      const id = `worker-${ordinal}`
+      const existing = this.workers.get(id)
+      if (existing) existing.status = 'active'
+      else {
+        this.workers.set(id, {
+          id,
+          displayId: String.fromCharCode(64 + ordinal),
+          status: 'active',
+          cpuUtilization: 0,
+          cpuDemand: 0,
+          cpuThrottled: false,
+          ioUtilization: 0,
+          ioDemand: 0,
+          ioThrottled: false,
+        })
       }
     }
-    while (existing.length < target) {
-      const ordinal = existing.length + 1
-      existing.push({ id: `${type}-slot-${ordinal}`, type, state: 'available', ordinal })
+    for (const worker of this.workers.values()) {
+      const ordinal = Number(worker.id.split('-')[1])
+      if (ordinal > this.config.workerCount && worker.status === 'active') {
+        worker.status = 'draining'
+        for (const workflow of this.workflows.values()) {
+          if (workflow.cachedWorkerId === worker.id) {
+            this.invalidateWorkflowCache(workflow.id, 'WORKER_REMOVED')
+          }
+        }
+      }
+      const pollerTarget = worker.status === 'active' ? undefined : 0
+      this.workflowPollers = this.resizePollers(
+        this.workflowPollers,
+        worker.id,
+        'workflow',
+        pollerTarget ?? this.config.workflowPollers,
+      )
+      this.activityPollers = this.resizePollers(
+        this.activityPollers,
+        worker.id,
+        'activity',
+        pollerTarget ?? this.config.activityPollers,
+      )
+      this.workflowSlots = this.resizeSlots(
+        this.workflowSlots,
+        worker.id,
+        'workflow',
+        worker.status === 'active' ? this.config.workflowSlots : 0,
+      )
+      this.activitySlots = this.resizeSlots(
+        this.activitySlots,
+        worker.id,
+        'activity',
+        worker.status === 'active' ? this.config.activitySlots : 0,
+      )
     }
-    return existing.filter((slot) => slot.ordinal <= target || slot.taskId)
+  }
+
+  private resizePollers(existing: Poller[], workerId: string, type: TaskType, target: number): Poller[] {
+    const otherWorkers = existing.filter((poller) => poller.workerId !== workerId)
+    const workerPollers = existing.filter((poller) => poller.workerId === workerId)
+    const busy = workerPollers.filter((poller) => poller.state !== 'long-polling')
+    const idle = workerPollers.filter((poller) => poller.state === 'long-polling')
+    const keep = [...busy, ...idle].slice(0, Math.max(target, busy.length))
+    while (keep.length < target) {
+      const ordinal = keep.length + 1
+      const prefix = workerId === SINGLE_WORKER_ID ? '' : `${workerId}-`
+      keep.push({ id: `${prefix}${type}-poller-${ordinal}`, workerId, type, state: 'long-polling' })
+    }
+    return [...otherWorkers, ...keep].sort((a, b) =>
+      a.workerId.localeCompare(b.workerId, undefined, { numeric: true })
+      || a.id.localeCompare(b.id, undefined, { numeric: true }))
+  }
+
+  private resizeSlots(existing: Slot[], workerId: string, type: TaskType, target: number): Slot[] {
+    const workerSlots = existing.filter((slot) => slot.workerId === workerId)
+    for (const slot of workerSlots) {
+      if (slot.ordinal > target) slot.state = 'draining'
+      else if (!slot.taskId) slot.state = 'available'
+    }
+    while (workerSlots.length < target) {
+      const ordinal = workerSlots.length + 1
+      const prefix = workerId === SINGLE_WORKER_ID ? '' : `${workerId}-`
+      const slot: Slot = {
+        id: `${prefix}${type}-slot-${ordinal}`,
+        workerId,
+        type,
+        state: 'available',
+        ordinal,
+      }
+      existing.push(slot)
+      workerSlots.push(slot)
+    }
+    return existing.filter((slot) => slot.workerId !== workerId || slot.ordinal <= target || slot.taskId)
   }
 
   private removeDrainedSlots(): void {
-    this.workflowSlots = this.workflowSlots.filter(
-      (slot) => slot.ordinal <= this.config.workflowSlots || slot.taskId,
-    )
-    this.activitySlots = this.activitySlots.filter(
-      (slot) => slot.ordinal <= this.config.activitySlots || slot.taskId,
-    )
+    this.workflowSlots = this.workflowSlots.filter((slot) => {
+      const worker = this.workers.get(slot.workerId)
+      return slot.taskId || (worker?.status === 'active' && slot.ordinal <= this.config.workflowSlots)
+    })
+    this.activitySlots = this.activitySlots.filter((slot) => {
+      const worker = this.workers.get(slot.workerId)
+      return slot.taskId || (worker?.status === 'active' && slot.ordinal <= this.config.activitySlots)
+    })
+  }
+
+  private removeDrainedWorkers(): void {
+    for (const worker of [...this.workers.values()]) {
+      if (worker.status !== 'draining') continue
+      const hasTask = [...this.tasks.values()].some((task) =>
+        task.assignedWorkerId === worker.id
+        && task.state !== 'returning'
+        && task.state !== 'completed',
+      )
+      if (hasTask) continue
+      this.workflowPollers = this.workflowPollers.filter((poller) => poller.workerId !== worker.id)
+      this.activityPollers = this.activityPollers.filter((poller) => poller.workerId !== worker.id)
+      this.workflowSlots = this.workflowSlots.filter((slot) => slot.workerId !== worker.id)
+      this.activitySlots = this.activitySlots.filter((slot) => slot.workerId !== worker.id)
+      this.workers.delete(worker.id)
+    }
+  }
+
+  private workerSnapshots(): WorkerSnapshot[] {
+    return [...this.workers.values()]
+      .sort((left, right) => left.id.localeCompare(right.id, undefined, { numeric: true }))
+      .map((worker) => {
+        const memoryUsedMb = this.currentMemoryUsedMb(worker.id)
+        return {
+          ...worker,
+          workflowPollers: this.workflowPollers.filter((poller) => poller.workerId === worker.id).map((poller) => ({ ...poller })),
+          activityPollers: this.activityPollers.filter((poller) => poller.workerId === worker.id).map((poller) => ({ ...poller })),
+          workflowSlots: this.workflowSlots.filter((slot) => slot.workerId === worker.id).map((slot) => ({ ...slot })),
+          activitySlots: this.activitySlots.filter((slot) => slot.workerId === worker.id).map((slot) => ({ ...slot })),
+          memoryUtilization: Math.min(memoryUsedMb / this.config.memoryCapacityMb, 1),
+          memoryUsedMb,
+          workflowCache: this.cacheEntries(worker.id),
+        }
+      })
   }
 
   private getPollers(type: TaskType): Poller[] {

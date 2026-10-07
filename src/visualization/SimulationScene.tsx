@@ -1,4 +1,13 @@
-import { IO_CAPACITY, type Poller, type SimulationSnapshot, type Slot } from '../simulation'
+import {
+  ACTIVE_TASK_MEMORY_MB,
+  BASE_WORKER_MEMORY_MB,
+  IO_CAPACITY,
+  POLL_REQUEST_VISUAL_THRESHOLD,
+  type Poller,
+  type SimulationSnapshot,
+  type SimulationTask,
+  type Slot,
+} from '../simulation'
 import {
   activityLaneY,
   maxVisibleQueueTasks,
@@ -21,31 +30,107 @@ function compactNumber(value: number): string {
 }
 
 function Pollers({ pollers, y }: { pollers: Poller[]; y: number }) {
+  const showPollRequests = pollers.length <= POLL_REQUEST_VISUAL_THRESHOLD
   return (
     <g>
       {pollers.map((poller, index) => {
         const point = pollerPoint(index, pollers.length, y)
         return (
-          <circle key={poller.id} cx={point.x} cy={point.y} r="8" className={`poller ${poller.state}`}>
-            <title>{poller.id} - {poller.state}</title>
-          </circle>
+          <g key={poller.id}>
+            {showPollRequests && poller.state === 'long-polling' && (
+              <line x1={point.x - 12} y1={point.y} x2={point.x - 44} y2={point.y} className="poll-request" />
+            )}
+            <circle cx={point.x} cy={point.y} r="8" className={`poller ${poller.state}`}>
+              <title>{`${poller.id} - ${poller.state}`}</title>
+            </circle>
+          </g>
         )
       })}
     </g>
   )
 }
 
-function Slots({ slots, y }: { slots: Slot[]; y: number }) {
+function Slots({ slots, y, tasks }: { slots: Slot[]; y: number; tasks: SimulationTask[] }) {
+  const tasksById = new Map(tasks.map((task) => [task.id, task]))
   return (
     <g>
       {slots.map((slot, index) => {
         const point = slotPoint(index, slots.length, y)
+        const task = slot.taskId ? tasksById.get(slot.taskId) : undefined
+        const replaying = task?.type === 'workflow' && task.executionPhase === 'replay'
         return (
-          <rect key={slot.id} x={point.x - 14} y={point.y - 14} width="28" height="28" rx="3" className={`slot ${slot.state}`}>
-            <title>{slot.id} - {slot.state}</title>
-          </rect>
+          <g key={slot.id}>
+            <rect x={point.x - 14} y={point.y - 14} width="28" height="28" rx="3" className={`slot ${slot.state}${replaying ? ' replaying' : ''}`}>
+              <title>{`${slot.id} - ${slot.state}${replaying ? ' - replaying Workflow History' : ''}`}</title>
+            </rect>
+            {replaying && <text x={point.x + 8} y={point.y + 11} textAnchor="middle" className="replay-glyph">↻</text>}
+          </g>
         )
       })}
+    </g>
+  )
+}
+
+function WorkflowCacheView({ snapshot }: { snapshot: SimulationSnapshot }) {
+  const capacity = snapshot.config.workflowCacheCapacity
+  const singleWorker = snapshot.workers.length === 1
+  const statusY = singleWorker ? 149 : 114
+  const visibleCellCount = Math.min(Math.max(capacity, 1), 8)
+  const recentHitIds = new Set(snapshot.recentEvents
+    .filter((event) => event.type === 'CACHE_HIT' && snapshot.simulatedTime - event.timestamp <= 0.6)
+    .map((event) => event.workflowId))
+  const recentEviction = [...snapshot.recentEvents].reverse().find((event) =>
+    event.type === 'CACHE_EVICTED' && snapshot.simulatedTime - event.timestamp <= 0.8,
+  )
+  const evictedDisplayId = snapshot.workflows.find((workflow) => workflow.id === recentEviction?.workflowId)?.displayId
+  const evictionStatus = recentEviction?.reason === 'WORKFLOW_COMPLETED' ? 'closed' : 'evicted'
+
+  return (
+    <g
+      className="workflow-cache"
+      data-cache-size={snapshot.workflowCache.length}
+      data-cache-capacity={capacity}
+      data-cache-misses={snapshot.cacheMetrics.cacheMisses}
+      data-replays-started={snapshot.cacheMetrics.replaysStarted}
+    >
+      <text x="785" y={singleWorker ? 130 : 95} className="section-label">Workflow Cache</text>
+      {snapshot.workers.map((worker, workerIndex) => {
+        const y = (singleWorker ? 137 : 102) + workerIndex * 21
+        const cells = Array.from({ length: visibleCellCount }, (_, index) => worker.workflowCache[index])
+        return (
+          <g key={worker.id} data-worker-id={worker.id}>
+            <rect x="780" y={y - 2} width="380" height="20" rx="3" className="worker-cache-card" />
+            {!singleWorker && <text x="788" y={y + 12} className="worker-card-title">WORKER {worker.displayId}</text>}
+            {capacity === 0 ? (
+              <text x={singleWorker ? 790 : 870} y={y + 12} className="cache-disabled">disabled</text>
+            ) : cells.map((entry, index) => {
+              const x = (singleWorker ? 790 : 870) + index * 29
+              const cacheDisplayId = entry?.displayId.replace(/^W/, 'WF')
+              return (
+                <g key={entry?.workflowId ?? `${worker.id}-empty-${index}`}>
+                  <rect
+                    x={x}
+                    y={y}
+                    width="25"
+                    height="16"
+                    rx="3"
+                    data-cache-workflow-id={entry?.workflowId}
+                    className={`cache-cell${entry ? ' occupied' : ''}${entry && recentHitIds.has(entry.workflowId) ? ' hit' : ''}`}
+                  >
+                    {entry && <title>{`${entry.displayId} warm on Worker ${worker.displayId}`}</title>}
+                  </rect>
+                  {entry && <text x={x + 12.5} y={y + 12} textAnchor="middle" className="cache-cell-label">{cacheDisplayId}</text>}
+                </g>
+              )
+            })}
+            <text x="1030" y={y + 12} className="metric-value">{worker.workflowCache.length} / {capacity}</text>
+          </g>
+        )
+      })}
+      {evictedDisplayId && <text x="1070" y={statusY} className="cache-evicted">{evictedDisplayId.replace(/^W/, 'WF')} {evictionStatus}</text>}
+      <text x="1152" y={statusY} textAnchor="end" className="cache-hit-rate">
+        Hit {Math.round(snapshot.cacheMetrics.cacheHitRate * 100)}% · Replays {snapshot.cacheMetrics.replaysStarted}
+      </text>
     </g>
   )
 }
@@ -63,6 +148,8 @@ function ResourceBar({
   throttled = false,
   detail,
   fillClass,
+  description,
+  segments,
 }: {
   resource: 'cpu' | 'memory' | 'io'
   label: string
@@ -71,14 +158,41 @@ function ResourceBar({
   throttled?: boolean
   detail?: string
   fillClass: string
+  description?: string
+  segments?: { className: string; label: string; utilization: number }[]
 }) {
   const percent = Math.round(utilization * 100)
+  let segmentOffset = 0
+  const visibleSegments = segments?.map((segment) => {
+    const start = Math.min(segmentOffset, 1)
+    segmentOffset += segment.utilization
+    const end = Math.min(segmentOffset, 1)
+    return { ...segment, start, width: Math.max(0, end - start) }
+  })
   return (
-    <g data-resource={resource} data-utilization={utilization} data-throttled={throttled}>
-      {throttled && <title>{label} throughput is being throttled</title>}
+    <g
+      data-resource={resource}
+      data-utilization={utilization}
+      data-throttled={throttled}
+      aria-label={description}
+    >
+      {(description || throttled) && <title>{description ?? `${label} throughput is being throttled`}</title>}
       <text x="785" y={y + 13} className="section-label">{label}</text>
       <rect x="875" y={y} width="180" height="18" rx="3" className="resource-track" />
-      <rect x="875" y={y} width={180 * utilization} height="18" rx="3" className={`resource-fill ${fillClass}${throttled ? ' throttled' : ''}`} />
+      {visibleSegments ? visibleSegments.map((segment) => (
+        <rect
+          key={segment.className}
+          x={875 + 180 * segment.start}
+          y={y}
+          width={180 * segment.width}
+          height="18"
+          className={`resource-fill ${segment.className}`}
+        >
+          <title>{segment.label}</title>
+        </rect>
+      )) : (
+        <rect x="875" y={y} width={180 * utilization} height="18" rx="3" className={`resource-fill ${fillClass}${throttled ? ' throttled' : ''}`} />
+      )}
       <text x="1160" y={y + 13} textAnchor="end" className="metric-value">
         {percent}%{detail ? ` (${detail})` : ''}
       </text>
@@ -98,6 +212,13 @@ export function SimulationScene({
   timeline: VisualTimeline
 }) {
   const activeWorkflows = [...timeline.workflows.values()].filter((workflow) => nowMs >= workflow.coreArrival)
+  const memoryCapacityMb = snapshot.config.memoryCapacityMb * snapshot.workers.length
+  const baseMemoryMb = BASE_WORKER_MEMORY_MB * snapshot.workers.length
+  const activeTaskMemoryMb = snapshot.tasks.filter((task) =>
+    task.state === 'acquired' || task.state === 'dispatching' || task.state === 'running',
+  ).length * ACTIVE_TASK_MEMORY_MB
+  const cacheMemoryMb = snapshot.workflowCache.reduce((sum, entry) => sum + entry.memoryMb, 0)
+  const memoryDescription = `Memory: ${compactNumber(baseMemoryMb)} MB base Workers + ${compactNumber(activeTaskMemoryMb)} MB active Tasks + ${compactNumber(cacheMemoryMb)} MB Workflow cache = ${compactNumber(snapshot.memoryUsedMb)} MB of ${memoryCapacityMb} MB`
   const workflowQueueDepth = snapshot.workflowQueue.length
   const activityQueueDepth = snapshot.activityQueue.length
   const returnActive = [...timeline.tasks.values()].some((task) =>
@@ -154,20 +275,47 @@ export function SimulationScene({
       <Overflow count={activityQueueDepth} x={665} y={activityLaneY + 23} />
 
       <rect x="760" y="40" width="420" height="540" rx="8" className="region worker-region" />
-      <text x="780" y="73" className="region-title">WORKER</text>
+      <text x="780" y="73" className="region-title">WORKERS ({snapshot.workers.length})</text>
+      {snapshot.workers.length === 1 && <>
+        <rect x="775" y="84" width="390" height="482" rx="6" className="worker-card-outline" />
+        <text x="790" y="108" className="worker-card-heading">WORKER {snapshot.workers[0].displayId}</text>
+      </>}
       <text x="785" y="190" className="section-label">Workflow Pollers</text>
       <Pollers pollers={snapshot.workflowPollers} y={workflowLaneY} />
       <text x="930" y={workflowSlotLabelY} className="section-label">Workflow Slots</text>
-      <Slots slots={snapshot.workflowSlots} y={workflowLaneY} />
+      <Slots slots={snapshot.workflowSlots} y={workflowLaneY} tasks={snapshot.tasks} />
+      <WorkflowCacheView snapshot={snapshot} />
 
       <text x="785" y="380" className="section-label">Activity Pollers</text>
       <Pollers pollers={snapshot.activityPollers} y={activityLaneY} />
       <text x="930" y={activitySlotLabelY} className="section-label">Activity Slots</text>
-      <Slots slots={snapshot.activitySlots} y={activityLaneY} />
+      <Slots slots={snapshot.activitySlots} y={activityLaneY} tasks={snapshot.tasks} />
 
-      <ResourceBar resource="cpu" label="CPU" y={501} utilization={snapshot.cpuUtilization} throttled={snapshot.cpuThrottled} detail={`${compactNumber(snapshot.cpuDemand)} / ${snapshot.config.cpuCapacity} CPU`} fillClass="cpu-fill" />
-      <ResourceBar resource="memory" label="Memory" y={527} utilization={snapshot.memoryUtilization} fillClass="memory-fill" />
-      <ResourceBar resource="io" label="I/O" y={553} utilization={snapshot.ioUtilization} throttled={snapshot.ioThrottled} detail={`${compactNumber(snapshot.ioDemand)} / ${IO_CAPACITY} throughput`} fillClass="io-fill" />
+      <g className="memory-legend" aria-label="Memory colors: base Worker, active Tasks, Workflow cache">
+        <text x="785" y="479">Memory colors</text>
+        <rect x="875" y="471" width="8" height="8" className="memory-base-fill" />
+        <text x="887" y="479">Base Worker</text>
+        <rect x="958" y="471" width="8" height="8" className="memory-task-fill" />
+        <text x="970" y="479">Active Tasks</text>
+        <rect x="1045" y="471" width="8" height="8" className="memory-cache-fill" />
+        <text x="1057" y="479">Workflow cache</text>
+      </g>
+      <ResourceBar resource="cpu" label="CPU" y={491} utilization={snapshot.cpuUtilization} throttled={snapshot.cpuThrottled} detail={`${compactNumber(snapshot.cpuDemand)} / ${snapshot.config.cpuCapacity * snapshot.workers.length} CPU`} fillClass="cpu-fill" />
+      <ResourceBar
+        resource="memory"
+        label="Memory"
+        y={517}
+        utilization={snapshot.memoryUtilization}
+        detail={`${compactNumber(snapshot.memoryUsedMb)} / ${memoryCapacityMb} MB`}
+        fillClass="memory-fill"
+        description={memoryDescription}
+        segments={[
+          { className: 'memory-base-fill', label: `${compactNumber(baseMemoryMb)} MB base Worker memory`, utilization: baseMemoryMb / memoryCapacityMb },
+          { className: 'memory-task-fill', label: `${compactNumber(activeTaskMemoryMb)} MB active Task memory`, utilization: activeTaskMemoryMb / memoryCapacityMb },
+          { className: 'memory-cache-fill', label: `${compactNumber(cacheMemoryMb)} MB Workflow cache memory`, utilization: cacheMemoryMb / memoryCapacityMb },
+        ]}
+      />
+      <ResourceBar resource="io" label="I/O" y={543} utilization={snapshot.ioUtilization} throttled={snapshot.ioThrottled} detail={`${compactNumber(snapshot.ioDemand)} / ${IO_CAPACITY * snapshot.workers.length} throughput`} fillClass="io-fill" />
 
       <circle cx="43" cy="496" r="5" className="workflow-execution" />
       <text x="54" y="500" className="small-label">Workflow</text>
@@ -176,10 +324,13 @@ export function SimulationScene({
       <rect x="38" y="530" width="9" height="9" className="task-activity" />
       <text x="54" y="539" className="small-label">Activity Task</text>
       <polygon points="43,548 48,553 43,558 38,553" className="result-pulse" />
-      <text x="54" y="557" className="small-label">Command / completion</text>
+      <text x="54" y="553" className="small-label" aria-label="Command / result RPC">
+        <tspan>Command / result</tspan>
+        <tspan x="54" dy="11">RPC</tspan>
+      </text>
 
       <path d={`M 1160 ${returnLaneY} H 390`} className={`return-rail${returnActive ? ' active' : ''}`} markerEnd="url(#return-arrow)" />
-      <text x="615" y={returnLaneY - 11} className="return-rail-label">COMMAND / COMPLETION RETURN</text>
+      <text x="615" y={returnLaneY - 11} className="return-rail-label">COMMANDS / RESULTS -&gt; TEMPORAL</text>
 
       <ResultLayer snapshot={snapshot} nowMs={nowMs} timeline={timeline} />
       <WorkflowLayer snapshot={snapshot} nowMs={nowMs} presentationNowMs={presentationNowMs} timeline={timeline} />

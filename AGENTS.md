@@ -50,3 +50,10 @@ to commit and push, default to a PR off `main` rather than pushing straight to
 
 Do not scaffold apps, Workers, compose stacks, or docs beyond what the human
 asked for. This folder was seeded with git + agent/hook hygiene only.
+
+## Manual browser validation
+
+Safari and Island are available for manual UI and end-to-end testing through direct Mac app control.
+If the browser runtime reports that no browser is connected, use Computer Use with Safari first and Island as the fallback.
+Do not report manual browser validation as pending solely because the browser runtime cannot discover a browser.
+Start the local development server, open its URL in a new browser tab, run the requested scenarios, and inspect screenshots and accessibility state.

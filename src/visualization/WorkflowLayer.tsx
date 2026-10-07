@@ -46,13 +46,16 @@ export function WorkflowLayer({
             r="7"
             className="workflow-start"
           >
-            <title>Workflow Start for {plan.workflowId}</title>
+            <title>{`Workflow Start for ${plan.workflowId}`}</title>
           </circle>
         )
       })}
       {visiblePlans.map((plan) => {
         const point = layout.get(plan.workflowId)!
+        const workflow = snapshot.workflows.find((candidate) => candidate.id === plan.workflowId)
         const completed = plan.completedPresentationAt !== undefined
+        const warm = workflow?.cachedWorkerId !== null && workflow?.cachedWorkerId !== undefined
+        const warmWorker = snapshot.workers.find((worker) => worker.id === workflow?.cachedWorkerId)
         const outstandingTasks = taskCounts.get(plan.workflowId) ?? 0
         const fadeProgress = completed
           ? Math.max(0, Math.min(1, (
@@ -62,8 +65,12 @@ export function WorkflowLayer({
         return (
           <g key={plan.workflowId} style={{ opacity: 1 - fadeProgress }}>
             <circle cx={point.x} cy={point.y} r="9" className={`workflow-execution${completed ? ' completed' : ''}`}>
-              <title>{plan.workflowId}{completed ? ' - completed' : ` - ${outstandingTasks} outstanding Tasks`}</title>
+              <title>{`${workflow?.displayId ?? plan.workflowId} (${plan.workflowId})${completed ? ' - completed' : ` - ${outstandingTasks} outstanding Tasks${warm ? ` - warm on Worker ${warmWorker?.displayId}` : ' - cold'}`}`}</title>
             </circle>
+            {warm && !completed && snapshot.workers.length > 1 && <>
+              <circle cx={point.x + 7} cy={point.y - 7} r="5" className="workflow-warm-badge" />
+              <text x={point.x + 7} y={point.y - 5.5} textAnchor="middle" className="workflow-warm-label">{warmWorker?.displayId}</text>
+            </>}
             <text
               x={point.x}
               y={point.y + 4}

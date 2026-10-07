@@ -253,7 +253,11 @@ describe('Workflow lifecycle', () => {
 
   it('keeps Workflow Execution alive while Activities run', () => {
     const simulation = new Simulation({ workflowStartRate: 1, activitiesPerWorkflow: 4, activitySlots: 1 })
-    runFor(simulation, 4.8)
+    for (let tick = 0; tick < 200; tick += 1) {
+      simulation.step()
+      const workflow = simulation.getSnapshot().workflows.find((candidate) => candidate.id === 'workflow-1')
+      if (workflow?.state === 'waiting' && workflow.activitiesCompleted < workflow.activitiesExpected) break
+    }
     const active = simulation.getSnapshot().workflows.find((workflow) => workflow.id === 'workflow-1')
     expect(active?.state).toBe('waiting')
     expect(active?.activitiesCompleted).toBeLessThan(active!.activitiesExpected)

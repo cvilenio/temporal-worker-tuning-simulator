@@ -160,6 +160,7 @@ describe('shared CPU', () => {
       workflowPollers: 32,
       workflowSlots: 32,
       activityPollers: 32,
+      activityTaskCpuDemand: 1,
       cpuCapacity: 2,
     }
     const sixteen = simulationWith({ ...workload, activitySlots: 16 })

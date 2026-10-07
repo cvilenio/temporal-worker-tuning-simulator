@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   activityLaneY,
   compactWorkflowPoints,
+  maxVisibleQueueTasks,
   pollerPoint,
   queueEgress,
   queueIngress,
@@ -44,6 +45,9 @@ describe('visual lane geometry', () => {
     const newer = queueStoragePoint(1, workflowLaneY)
     expect(oldest.x).toBeLessThan(egress.x)
     expect(newer.x).toBeLessThan(oldest.x)
+    expect(oldest.x - newer.x).toBe(12.5)
+    expect(queueStoragePoint(maxVisibleQueueTasks - 1, workflowLaneY).x)
+      .toBeGreaterThan(queueIngress(workflowLaneY).x)
   })
 
   it('compacts remaining Workflow Executions after one is removed', () => {

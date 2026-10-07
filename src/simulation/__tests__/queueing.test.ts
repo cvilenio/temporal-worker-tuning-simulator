@@ -57,7 +57,7 @@ describe('Queue admission and zero capacity', () => {
     simulation.startWorkflows(6)
     runFor(simulation, 2.6)
     expect(simulation.getSnapshot().workflowQueue).toHaveLength(6)
-    expect(simulation.getSnapshot().workflowPollers.every((poller) => poller.state === 'polling')).toBe(true)
+    expect(simulation.getSnapshot().workflowPollers.every((poller) => poller.state === 'long-polling')).toBe(true)
 
     simulation.updateConfig({ workflowSlots: 4 })
     simulation.step(TICK_SECONDS)
@@ -72,7 +72,7 @@ describe('Queue admission and zero capacity', () => {
     })
     simulation.startWorkflows(8)
     runFor(simulation, 2.6)
-    expect(simulation.getSnapshot().workflowPollers.filter((poller) => poller.state === 'dispatching')).toHaveLength(4)
+    expect(simulation.getSnapshot().workflowPollers.filter((poller) => poller.state === 'task-received')).toHaveLength(4)
     const queuedBeforeScaleDown = simulation.getSnapshot().workflowQueue.length
     const dispatchesBeforeScaleDown = simulation.getEventsSince(0)
       .filter((event) => event.type === 'WORKFLOW_TASK_DISPATCH_STARTED').length
