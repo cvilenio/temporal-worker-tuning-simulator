@@ -55,6 +55,19 @@ describe('Workflow lifecycle', () => {
     expect(simulation.getSnapshot().simulatedTime).toBe(0)
   })
 
+  it('starts continuous generation immediately and measures cadence from that start', () => {
+    const simulation = new Simulation({ workflowStartRate: 0.5 })
+
+    simulation.startContinuousGeneration()
+    expect(simulation.getSnapshot().workflows).toHaveLength(1)
+
+    runFor(simulation, 1.95)
+    expect(simulation.getSnapshot().workflows).toHaveLength(1)
+
+    simulation.step(0.05)
+    expect(simulation.getSnapshot().workflows).toHaveLength(2)
+  })
+
   it('schedules the initial Workflow Task only after Workflow Start arrives', () => {
     const simulation = new Simulation({ workflowStartRate: 0 })
     simulation.startWorkflow()
@@ -166,9 +179,14 @@ describe('Workflow lifecycle', () => {
       workflowSlots: 1,
       activitySlots: 3,
       cpuCapacity: 4,
+      workflowTaskBaseDurationSeconds: 0.05,
+      activityTaskBaseDurationSeconds: 0.5,
     })
     simulation.startWorkflow()
-    runFor(simulation, 4)
+    for (let tick = 0; tick < 200; tick += 1) {
+      simulation.step()
+      if (simulation.getSnapshot().tasks.filter((task) => task.type === 'activity').length === 3) break
+    }
     const activities = simulation.getSnapshot().tasks
       .filter((task) => task.type === 'activity')
       .sort((left, right) => left.activityIndex - right.activityIndex)
@@ -189,6 +207,8 @@ describe('Workflow lifecycle', () => {
       activityPollers: 4,
       activitySlots: 4,
       cpuCapacity: 8,
+      workflowTaskBaseDurationSeconds: 0.05,
+      activityTaskBaseDurationSeconds: 0.5,
     })
     simulation.startWorkflow()
     runFor(simulation, 25)

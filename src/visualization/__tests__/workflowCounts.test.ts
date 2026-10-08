@@ -22,6 +22,7 @@ function task(id: string, workflowId: string): SimulationTask {
     maxIoDemand: 0,
     resourceProfile: 'cpu',
     executionPhase: 'activity',
+    executionDurationSeconds: 2,
     replayCpuWorkRemaining: 0,
     replayCpuWorkTotal: 0,
   }

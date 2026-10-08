@@ -12,6 +12,7 @@ describe('shared I/O throughput', () => {
       taskResourceProfilesLocked: false,
       workflowTaskIoDemand: 0.25,
       activityTaskCpuDemand: 1,
+      workflowTaskBaseDurationSeconds: 1,
     })
     simulation.startWorkflow()
 
@@ -146,6 +147,32 @@ describe('shared I/O throughput', () => {
     expect(snapshot.ioThrottled).toBe(true)
     runFor(simulation, 0.3)
     expect(simulation.getSnapshot().taskThroughputHistory.some((sample) => sample.throttled)).toBe(true)
+  })
+
+  it('applies live Worker I/O capacity changes to running Tasks', () => {
+    const simulation = new Simulation({
+      workflowStartRate: 0,
+      activitiesPerWorkflow: 1,
+      activityFanout: 1,
+      workflowTaskResourceProfile: 'cpu',
+      activityTaskResourceProfile: 'io',
+      taskResourceProfilesLocked: false,
+      activityTaskIoDemand: 0.5,
+      ioCapacity: 1,
+    })
+    simulation.startWorkflow()
+
+    for (let tick = 0; tick < 200 && simulation.getSnapshot().ioDemand === 0; tick += 1) {
+      simulation.step()
+    }
+    expect(simulation.getSnapshot().ioUtilization).toBe(0.5)
+
+    simulation.updateConfig({ ioCapacity: 0.2 })
+    simulation.step()
+    const constrained = simulation.getSnapshot()
+    expect(constrained.config.ioCapacity).toBe(0.2)
+    expect(constrained.ioUtilization).toBe(1)
+    expect(constrained.ioThrottled).toBe(true)
   })
 
   it('reprofiles pending Tasks while running Tasks retain their profile', () => {

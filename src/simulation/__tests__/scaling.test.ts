@@ -30,10 +30,14 @@ describe('bottleneck migration', () => {
       workflowSlots: 16,
       activityPollers: 16,
       activitySlots: 1,
-      activityTaskCpuDemand: 1,
-      cpuCapacity: 4,
+      activityTaskCpuDemand: 0.1,
+      cpuCapacity: 0.5,
       workflowCacheCapacity: 50,
       memoryCapacityMb: 1_024,
+      workflowTaskBaseDurationSeconds: 0.05,
+      workflowTaskReplayLatencySeconds: 0.05,
+      activityTaskBaseDurationSeconds: 2,
+      activityTaskDurationJitterPercent: 0,
     })
     simulation.startWorkflows(300)
     runUntil(simulation, () => simulation.getSnapshot().workflows.every((workflow) =>
@@ -41,20 +45,20 @@ describe('bottleneck migration', () => {
     ))
 
     const beforeSlotLimited = activityCompletions(simulation)
-    const slotLimitedCpu = runWindow(simulation, 12)
+    const slotLimitedCpu = runWindow(simulation, 20)
     const afterSlotLimited = activityCompletions(simulation)
     const slotLimitedCompletions = afterSlotLimited - beforeSlotLimited
-    expect(slotLimitedCpu).toBeLessThan(0.6)
+    expect(slotLimitedCpu).toBeLessThan(0.4)
 
     simulation.updateConfig({ activitySlots: 16 })
-    const cpuLimitedCpu = runWindow(simulation, 12)
+    const cpuLimitedCpu = runWindow(simulation, 20)
     const afterCpuLimited = activityCompletions(simulation)
     const cpuLimitedCompletions = afterCpuLimited - afterSlotLimited
     expect(cpuLimitedCompletions).toBeGreaterThan(slotLimitedCompletions * 2)
     expect(cpuLimitedCpu).toBeGreaterThan(0.8)
 
-    simulation.updateConfig({ cpuCapacity: 8 })
-    runFor(simulation, 12)
+    simulation.updateConfig({ cpuCapacity: 1 })
+    runFor(simulation, 20)
     const scaledCpuCompletions = activityCompletions(simulation) - afterCpuLimited
     expect(scaledCpuCompletions).toBeGreaterThan(cpuLimitedCompletions * 1.2)
   })

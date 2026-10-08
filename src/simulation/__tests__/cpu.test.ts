@@ -3,6 +3,36 @@ import { Simulation } from '..'
 import { activityCompletions, runFor, simulationWith } from './helpers'
 
 describe('shared CPU', () => {
+  it('proportionally throttles Task work that exceeds fractional Worker CPU', () => {
+    const simulation = new Simulation({
+      workflowStartRate: 0,
+      activitiesPerWorkflow: 1,
+      activityFanout: 1,
+      cpuCapacity: 0.1,
+      activityTaskCpuDemand: 0.25,
+      activityTaskBaseDurationSeconds: 2,
+      activityTaskDurationJitterPercent: 0,
+    })
+    simulation.startWorkflow()
+
+    let snapshot = simulation.getSnapshot()
+    for (let tick = 0; tick < 400; tick += 1) {
+      simulation.step()
+      snapshot = simulation.getSnapshot()
+      if (snapshot.tasks.some((task) => task.type === 'activity' && task.state === 'running')) break
+    }
+
+    const running = snapshot.tasks.find((task) => task.type === 'activity' && task.state === 'running')!
+    const workBefore = running.cpuWorkRemaining
+    expect(snapshot.cpuDemand).toBe(0.25)
+    expect(snapshot.cpuUtilization).toBe(1)
+    expect(snapshot.cpuThrottled).toBe(true)
+
+    simulation.step()
+    const workAfter = simulation.getSnapshot().tasks.find((task) => task.id === running.id)!.cpuWorkRemaining
+    expect(workBefore - workAfter).toBeCloseTo(0.00375)
+  })
+
   it('combines fractional Task demand against integer CPU capacity', () => {
     const simulation = new Simulation({
       workflowStartRate: 0,
@@ -14,6 +44,8 @@ describe('shared CPU', () => {
       activitySlots: 2,
       cpuCapacity: 1,
       activityTaskCpuDemand: 0.5,
+      activityTaskBaseDurationSeconds: 0.5,
+      activityTaskDurationJitterPercent: 0,
     })
     simulation.startWorkflow()
 
@@ -53,6 +85,7 @@ describe('shared CPU', () => {
         cpuCapacity: 1,
         workflowTaskCpuDemand: 0.05,
         activityTaskCpuDemand,
+        activityTaskBaseDurationSeconds: 0.5,
       })
       simulation.startWorkflow()
       runFor(simulation, 20)
@@ -137,19 +170,24 @@ describe('shared CPU', () => {
     expect(newer.maxCpuDemand).toBe(0.25)
   })
 
-  it('normalizes CPU capacity to supported fractional and whole units', () => {
+  it('normalizes CPU capacity to tenths between 0.1 and 1 CPU', () => {
     const simulation = new Simulation({ cpuCapacity: 0.6 })
-    expect(simulation.getSnapshot().config.cpuCapacity).toBe(0.5)
+    expect(simulation.getSnapshot().config.cpuCapacity).toBe(0.6)
     simulation.updateConfig({ cpuCapacity: 2.6 })
-    expect(simulation.getSnapshot().config.cpuCapacity).toBe(3)
+    expect(simulation.getSnapshot().config.cpuCapacity).toBe(1)
     simulation.updateConfig({ cpuCapacity: 12 })
-    expect(simulation.getSnapshot().config.cpuCapacity).toBe(8)
+    expect(simulation.getSnapshot().config.cpuCapacity).toBe(1)
+    simulation.updateConfig({ cpuCapacity: 0 })
+    expect(simulation.getSnapshot().config.cpuCapacity).toBe(0.1)
   })
 
   it('reports rolling Slot residence time from reservation through completion', () => {
     const simulation = new Simulation({ workflowStartRate: 0 })
     simulation.startWorkflow()
-    runFor(simulation, 4)
+    for (let tick = 0; tick < 400; tick += 1) {
+      simulation.step()
+      if (simulation.getSnapshot().metrics.slotResidenceSeconds > 0) break
+    }
     expect(simulation.getSnapshot().metrics.slotResidenceSeconds).toBeGreaterThan(0)
   })
 
@@ -162,6 +200,8 @@ describe('shared CPU', () => {
       activityPollers: 32,
       activityTaskCpuDemand: 1,
       cpuCapacity: 2,
+      workflowTaskBaseDurationSeconds: 0.05,
+      activityTaskBaseDurationSeconds: 0.5,
     }
     const sixteen = simulationWith({ ...workload, activitySlots: 16 })
     const thirtyTwo = simulationWith({ ...workload, activitySlots: 32 })
@@ -182,15 +222,19 @@ describe('shared CPU', () => {
       workflowSlots: 16,
       activityPollers: 16,
       activitySlots: 16,
-      cpuCapacity: 2,
+      cpuCapacity: 0.2,
+      workflowTaskBaseDurationSeconds: 0.05,
+      workflowTaskReplayLatencySeconds: 0.05,
+      activityTaskBaseDurationSeconds: 2,
+      activityTaskDurationJitterPercent: 0,
     }
     const baseline = simulationWith(workload)
     const scaled = simulationWith(workload)
-    runFor(baseline, 6)
-    runFor(scaled, 6)
-    scaled.updateConfig({ cpuCapacity: 8 })
-    runFor(baseline, 6)
-    runFor(scaled, 6)
+    runFor(baseline, 15)
+    runFor(scaled, 15)
+    scaled.updateConfig({ cpuCapacity: 1 })
+    runFor(baseline, 20)
+    runFor(scaled, 20)
     expect(activityCompletions(scaled)).toBeGreaterThan(activityCompletions(baseline) * 1.35)
   })
 })

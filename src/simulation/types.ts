@@ -18,6 +18,7 @@ export interface SimulationConfig {
   workflowSlots: number
   activitySlots: number
   cpuCapacity: number
+  ioCapacity: number
   workflowCacheCapacity: number
   workflowCacheEntryMemoryMb: number
   memoryCapacityMb: number
@@ -28,6 +29,11 @@ export interface SimulationConfig {
   activityTaskCpuDemand: number
   workflowTaskIoDemand: number
   activityTaskIoDemand: number
+  workflowTaskBaseDurationSeconds: number
+  activityTaskBaseDurationSeconds: number
+  workflowTaskDurationJitterPercent: number
+  activityTaskDurationJitterPercent: number
+  workflowTaskReplayLatencySeconds: number
 }
 
 export interface WorkflowExecution {
@@ -78,6 +84,7 @@ export interface BaseTask {
   maxIoDemand: number
   resourceProfile: TaskResourceProfile
   executionPhase: TaskExecutionPhase
+  executionDurationSeconds: number
   replayCpuWorkRemaining: number
   replayCpuWorkTotal: number
   cacheOutcome?: 'hit' | 'miss'
@@ -200,6 +207,31 @@ export interface TaskThroughputSample {
   replaying: boolean
 }
 
+export type TaskTypeMetricSample = TaskThroughputSample
+
+export interface RoundTaskThroughputSample extends TaskThroughputSample {
+  roundId: number
+  elapsedSeconds: number
+}
+
+export interface TaskDistributionStats {
+  completed: number
+  throughput: number
+  averageLatency: number
+  p25Latency: number
+  p50Latency: number
+  p75Latency: number
+  p95Latency: number
+  p99Latency: number
+  maxLatency: number
+}
+
+export interface TaskDistribution {
+  total: TaskDistributionStats
+  workflow: TaskDistributionStats
+  activity: TaskDistributionStats
+}
+
 export interface SimulationSnapshot {
   simulatedTime: number
   config: SimulationConfig
@@ -217,6 +249,7 @@ export interface SimulationSnapshot {
   cpuThrottled: boolean
   memoryUtilization: number
   memoryUsedMb: number
+  memoryPressure: boolean
   ioUtilization: number
   ioDemand: number
   ioThrottled: boolean
@@ -225,6 +258,17 @@ export interface SimulationSnapshot {
   metrics: RollingMetrics
   slotResidenceHistory: MetricSample[]
   taskThroughputHistory: TaskThroughputSample[]
+  taskLatencyHistory: TaskTypeMetricSample[]
+  taskDistribution: TaskDistribution
+  roundTaskThroughput: RoundTaskThroughputSample | null
+  roundTaskThroughputHistory: RoundTaskThroughputSample[]
   workflowCompletionHistory: MetricSample[]
+  pollerBusyRatioHistory: TaskTypeMetricSample[]
+  slotUtilizationHistory: TaskTypeMetricSample[]
+  syncMatchRateHistory: TaskTypeMetricSample[]
+  backlogHistory: TaskTypeMetricSample[]
+  cpuUtilizationHistory: MetricSample[]
+  memoryUtilizationHistory: MetricSample[]
+  ioUtilizationHistory: MetricSample[]
   recentEvents: SemanticEvent[]
 }

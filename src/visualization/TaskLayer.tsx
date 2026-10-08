@@ -52,6 +52,7 @@ function positionFor(
   task: SimulationTask,
   snapshot: SimulationSnapshot,
   queueIndex: number,
+  renderTimeSeconds: number,
 ): Point {
   const y = laneY(task.type)
   const storage = queueStoragePoint(queueIndex, y)
@@ -61,13 +62,13 @@ function positionFor(
   const slot = slotPoint(assignedIndex(task.assignedSlotId, slots), slots.length, y)
 
   if (task.state === 'enqueuing') {
-    const progress = (snapshot.simulatedTime - enqueueStartTime(task)) / QUEUE_ADMISSION_SECONDS
+    const progress = (renderTimeSeconds - enqueueStartTime(task)) / QUEUE_ADMISSION_SECONDS
     if (progress < 0.5) return interpolate(taskOriginPoint(task.type), queueIngress(y), progress / 0.5)
     return interpolate(queueIngress(y), storage, (progress - 0.5) / 0.5)
   }
   if (task.state === 'queued') return storage
   if (task.state === 'acquired') {
-    const progress = (snapshot.simulatedTime - task.dispatchStartedAt!) / POLL_DISPATCH_SECONDS
+    const progress = (renderTimeSeconds - task.dispatchStartedAt!) / POLL_DISPATCH_SECONDS
     const departure = queueStoragePoint(task.dispatchBatchIndex ?? 0, y)
     const egress = queueEgress(y)
     const travelFraction = 0.6
@@ -78,13 +79,14 @@ function positionFor(
       : interpolate(egress, poller, (travelProgress - 0.2) / 0.8)
   }
   if (task.state === 'dispatching') {
-    const progress = (snapshot.simulatedTime - task.slotDispatchStartedAt!) / SLOT_DISPATCH_SECONDS
+    const progress = (renderTimeSeconds - task.slotDispatchStartedAt!) / SLOT_DISPATCH_SECONDS
     return interpolate(poller, slot, progress)
   }
   return slot
 }
 
-export function TaskLayer({ snapshot }: { snapshot: SimulationSnapshot }) {
+export function TaskLayer({ snapshot, nowMs = snapshot.simulatedTime * 1_000 }: { snapshot: SimulationSnapshot; nowMs?: number }) {
+  const renderTimeSeconds = Math.max(snapshot.simulatedTime, nowMs / 1_000)
   const indexes = queueIndexes(snapshot)
   const queueDepth = (type: TaskType) => type === 'workflow'
     ? snapshot.workflowQueue.length
@@ -119,18 +121,18 @@ export function TaskLayer({ snapshot }: { snapshot: SimulationSnapshot }) {
       })}
       {snapshot.tasks.map((task) => {
         if (task.state === 'returning') return null
-        if (task.state === 'enqueuing' && snapshot.simulatedTime < enqueueStartTime(task)) return null
+        if (task.state === 'enqueuing' && renderTimeSeconds < enqueueStartTime(task)) return null
         const queueIndex = indexes.get(task.id) ?? 0
         if (
           task.state === 'queued'
           && queueIndex >= maxVisibleQueueTasks
           && queueDepth(task.type) > maxVisibleQueueTasks
         ) return null
-        const point = positionFor(task, snapshot, queueIndex)
+        const point = positionFor(task, snapshot, queueIndex, renderTimeSeconds)
         const sticky = task.type === 'workflow' && task.routingState === 'sticky-wait'
         const fallback = task.type === 'workflow'
           && task.stickyFallbackAt !== undefined
-          && snapshot.simulatedTime - task.stickyFallbackAt <= 0.8
+          && renderTimeSeconds - task.stickyFallbackAt <= 0.8
         const replaying = task.type === 'workflow' && task.executionPhase === 'replay'
         const worker = sticky
           ? snapshot.workers.find((candidate) => candidate.id === task.preferredWorkerId)

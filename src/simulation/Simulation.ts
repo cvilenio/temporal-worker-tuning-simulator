@@ -1,37 +1,41 @@
 import {
-  ACTIVITY_CPU_BASE_DURATION_SECONDS,
-  ACTIVITY_IO_BASE_DURATION_SECONDS,
   ACTIVE_TASK_MEMORY_MB,
   BASE_WORKER_MEMORY_MB,
   CACHED_WORKFLOW_MEMORY_MB,
   CPU_CONTENTION_KNEE,
-  CPU_CAPACITY_OPTIONS,
+  MAX_CPU_CAPACITY,
+  MIN_CPU_CAPACITY,
   CPU_MAX_CONTENTION_SPEED_LOSS,
   COMPLETION_RETURN_SECONDS,
   DEFAULT_MEMORY_CAPACITY_MB,
   DEFAULT_ACTIVITY_TASK_CPU_DEMAND,
+  DEFAULT_ACTIVITY_TASK_BASE_DURATION_SECONDS,
   DEFAULT_ACTIVITY_TASK_IO_DEMAND,
+  DEFAULT_ACTIVITY_TASK_DURATION_JITTER_PERCENT,
+  DEFAULT_WORKFLOW_TASK_BASE_DURATION_SECONDS,
   DEFAULT_WORKFLOW_TASK_CPU_DEMAND,
   DEFAULT_WORKFLOW_TASK_IO_DEMAND,
+  DEFAULT_WORKFLOW_TASK_REPLAY_LATENCY_SECONDS,
+  DEFAULT_WORKFLOW_TASK_DURATION_JITTER_PERCENT,
   DEFAULT_WORKFLOW_CACHE_CAPACITY,
   IO_CAPACITY,
   IO_CONTENTION_KNEE,
   IO_MAX_CONTENTION_SPEED_LOSS,
+  MAX_IO_CAPACITY,
   MAX_RECENT_EVENTS,
+  MEMORY_PRESSURE_PULSE_SECONDS,
   METRIC_SAMPLE_SECONDS,
   METRIC_WINDOW_SECONDS,
+  MIN_IO_CAPACITY,
   POLL_DISPATCH_SECONDS,
   QUEUE_ADMISSION_SECONDS,
   QUEUE_DWELL_SECONDS,
   REPLAY_CPU_DEMAND,
-  REPLAY_CPU_PER_HISTORY_UNIT,
   SINGLE_WORKER_ID,
   STICKY_SCHEDULE_TO_START_TIMEOUT_SECONDS,
   SLOT_DISPATCH_SECONDS,
   TASK_ENQUEUE_STAGGER_SECONDS,
   TICK_SECONDS,
-  WORKFLOW_CPU_BASE_DURATION_SECONDS,
-  WORKFLOW_IO_BASE_DURATION_SECONDS,
   WORKFLOW_START_TRANSIT_SECONDS,
   WORKFLOW_TASK_ISSUE_DELAY_SECONDS,
   WORKFLOW_TASK_ISSUE_JITTER_SECONDS,
@@ -48,6 +52,10 @@ import type {
   TaskResourceProfile,
   TaskType,
   TaskThroughputSample,
+  TaskTypeMetricSample,
+  RoundTaskThroughputSample,
+  TaskDistribution,
+  TaskDistributionStats,
   WorkflowExecution,
   WorkflowCacheEntry,
   WorkflowTask,
@@ -65,6 +73,7 @@ export const defaultConfig: SimulationConfig = {
   workflowSlots: 2,
   activitySlots: 4,
   cpuCapacity: 1,
+  ioCapacity: IO_CAPACITY,
   workflowCacheCapacity: DEFAULT_WORKFLOW_CACHE_CAPACITY,
   workflowCacheEntryMemoryMb: CACHED_WORKFLOW_MEMORY_MB,
   memoryCapacityMb: DEFAULT_MEMORY_CAPACITY_MB,
@@ -75,12 +84,24 @@ export const defaultConfig: SimulationConfig = {
   activityTaskCpuDemand: DEFAULT_ACTIVITY_TASK_CPU_DEMAND,
   workflowTaskIoDemand: DEFAULT_WORKFLOW_TASK_IO_DEMAND,
   activityTaskIoDemand: DEFAULT_ACTIVITY_TASK_IO_DEMAND,
+  workflowTaskBaseDurationSeconds: DEFAULT_WORKFLOW_TASK_BASE_DURATION_SECONDS,
+  activityTaskBaseDurationSeconds: DEFAULT_ACTIVITY_TASK_BASE_DURATION_SECONDS,
+  workflowTaskDurationJitterPercent: DEFAULT_WORKFLOW_TASK_DURATION_JITTER_PERCENT,
+  activityTaskDurationJitterPercent: DEFAULT_ACTIVITY_TASK_DURATION_JITTER_PERCENT,
+  workflowTaskReplayLatencySeconds: DEFAULT_WORKFLOW_TASK_REPLAY_LATENCY_SECONDS,
 }
 
 function normalizeConfig(config: SimulationConfig): SimulationConfig {
   const cpuDemand = (value: number) => Math.max(0.01, Math.min(1, Math.round(value * 100) / 100))
-  const cpuCapacity = CPU_CAPACITY_OPTIONS.reduce((nearest, option) =>
-    Math.abs(option - config.cpuCapacity) < Math.abs(nearest - config.cpuCapacity) ? option : nearest,
+  const taskDuration = (value: number) => Math.max(0.05, Math.min(10, Math.round(value * 20) / 20))
+  const durationJitter = (value: number) => Math.max(0, Math.min(100, Math.round(value / 5) * 5))
+  const cpuCapacity = Math.max(
+    MIN_CPU_CAPACITY,
+    Math.min(MAX_CPU_CAPACITY, Math.round(config.cpuCapacity * 10) / 10),
+  )
+  const ioCapacity = Math.max(
+    MIN_IO_CAPACITY,
+    Math.min(MAX_IO_CAPACITY, Math.round(config.ioCapacity * 10) / 10),
   )
   const workflowTaskResourceProfile = config.workflowTaskResourceProfile === 'io' ? 'io' : 'cpu'
   const activityTaskResourceProfile = config.taskResourceProfilesLocked
@@ -89,6 +110,7 @@ function normalizeConfig(config: SimulationConfig): SimulationConfig {
   return {
     ...config,
     cpuCapacity,
+    ioCapacity,
     workerCount: Math.max(1, Math.min(4, Math.round(config.workerCount))),
     workflowCacheCapacity: Math.max(0, Math.min(50, Math.round(config.workflowCacheCapacity))),
     workflowCacheEntryMemoryMb: Math.max(1, Math.min(16, Math.round(config.workflowCacheEntryMemoryMb))),
@@ -100,6 +122,11 @@ function normalizeConfig(config: SimulationConfig): SimulationConfig {
     activityTaskCpuDemand: cpuDemand(config.activityTaskCpuDemand),
     workflowTaskIoDemand: cpuDemand(config.workflowTaskIoDemand),
     activityTaskIoDemand: cpuDemand(config.activityTaskIoDemand),
+    workflowTaskBaseDurationSeconds: taskDuration(config.workflowTaskBaseDurationSeconds),
+    activityTaskBaseDurationSeconds: taskDuration(config.activityTaskBaseDurationSeconds),
+    workflowTaskDurationJitterPercent: durationJitter(config.workflowTaskDurationJitterPercent),
+    activityTaskDurationJitterPercent: durationJitter(config.activityTaskDurationJitterPercent),
+    workflowTaskReplayLatencySeconds: taskDuration(config.workflowTaskReplayLatencySeconds),
   }
 }
 
@@ -116,6 +143,29 @@ interface SlotResidenceRecord {
 interface TaskCompletionRecord {
   timestamp: number
   type: TaskType
+}
+
+interface TaskLatencyRecord extends TaskCompletionRecord {
+  seconds: number
+}
+
+interface LoadTestRound {
+  startedAt: number
+  endedAt: number | null
+  latencyBaseline: number
+}
+
+interface TaskDeliveryRecord {
+  timestamp: number
+  type: TaskType
+  syncMatched: boolean
+}
+
+interface TaskThroughputRound {
+  id: number
+  startedAt: number
+  workflowBaseline: number
+  activityBaseline: number
 }
 
 interface InternalWorkflowCacheEntry extends WorkflowCacheEntry {
@@ -166,6 +216,7 @@ export class Simulation {
   private slotResidences: SlotResidenceRecord[] = []
   private slotResidenceHistory: MetricSample[] = [{ timestamp: 0, value: 0, throttled: false, replaying: false }]
   private taskCompletions: TaskCompletionRecord[] = []
+  private taskLatencies: TaskLatencyRecord[] = []
   private taskThroughputHistory: TaskThroughputSample[] = [{
     timestamp: 0,
     total: 0,
@@ -174,10 +225,25 @@ export class Simulation {
     throttled: false,
     replaying: false,
   }]
+  private taskLatencyHistory: TaskTypeMetricSample[] = [this.emptyTaskTypeMetricSample()]
+  private taskCompletionTotals = { workflow: 0, activity: 0 }
+  private nextTaskThroughputRoundId = 1
+  private taskThroughputRound: TaskThroughputRound | null = null
+  private loadTestRound: LoadTestRound | null = null
+  private roundTaskThroughputHistory: RoundTaskThroughputSample[] = []
   private workflowCompletionHistory: MetricSample[] = [{ timestamp: 0, value: 0, throttled: false, replaying: false }]
+  private taskDeliveries: TaskDeliveryRecord[] = []
+  private pollerBusyRatioHistory: TaskTypeMetricSample[] = [this.emptyTaskTypeMetricSample()]
+  private slotUtilizationHistory: TaskTypeMetricSample[] = [this.emptyTaskTypeMetricSample()]
+  private syncMatchRateHistory: TaskTypeMetricSample[] = [this.emptyTaskTypeMetricSample()]
+  private backlogHistory: TaskTypeMetricSample[] = [this.emptyTaskTypeMetricSample()]
+  private cpuUtilizationHistory: MetricSample[] = []
+  private memoryUtilizationHistory: MetricSample[] = []
+  private ioUtilizationHistory: MetricSample[] = []
   private cpuUtilization = 0
   private cpuDemand = 0
   private cpuThrottled = false
+  private memoryPressureUntil = 0
   private ioUtilization = 0
   private ioDemand = 0
   private ioThrottled = false
@@ -188,6 +254,7 @@ export class Simulation {
     this.config = normalizeConfig({ ...defaultConfig, ...config })
     this.seed = seed
     this.syncCapacity()
+    this.initializeResourceUtilizationHistories()
   }
 
   step(deltaSeconds = TICK_SECONDS): void {
@@ -230,6 +297,37 @@ export class Simulation {
     for (let index = 0; index < total; index += 1) this.createWorkflow()
   }
 
+  startContinuousGeneration(): void {
+    this.arrivalAccumulator = 0
+    this.createWorkflow()
+  }
+
+  beginTaskThroughputRound(): void {
+    if (this.taskThroughputRound) return
+    this.taskThroughputRound = {
+      id: this.nextTaskThroughputRoundId++,
+      startedAt: this.time,
+      workflowBaseline: this.taskCompletionTotals.workflow,
+      activityBaseline: this.taskCompletionTotals.activity,
+    }
+    this.loadTestRound = {
+      startedAt: this.time,
+      endedAt: null,
+      latencyBaseline: this.taskLatencies.length,
+    }
+    this.recordRoundTaskThroughputSample(false, false)
+  }
+
+  endTaskThroughputRound(): void {
+    if (!this.taskThroughputRound) return
+    this.recordRoundTaskThroughputSample(
+      this.throttledSinceLastMetricSample,
+      this.replayingSinceLastMetricSample,
+    )
+    if (this.loadTestRound) this.loadTestRound.endedAt = this.time
+    this.taskThroughputRound = null
+  }
+
   reset(): void {
     const config = { ...this.config }
     this.time = 0
@@ -247,11 +345,27 @@ export class Simulation {
     this.slotResidences = []
     this.slotResidenceHistory = [{ timestamp: 0, value: 0, throttled: false, replaying: false }]
     this.taskCompletions = []
+    this.taskLatencies = []
     this.taskThroughputHistory = [{ timestamp: 0, total: 0, workflow: 0, activity: 0, throttled: false, replaying: false }]
+    this.taskLatencyHistory = [this.emptyTaskTypeMetricSample()]
+    this.taskCompletionTotals = { workflow: 0, activity: 0 }
+    this.nextTaskThroughputRoundId = 1
+    this.taskThroughputRound = null
+    this.loadTestRound = null
+    this.roundTaskThroughputHistory = []
     this.workflowCompletionHistory = [{ timestamp: 0, value: 0, throttled: false, replaying: false }]
+    this.taskDeliveries = []
+    this.pollerBusyRatioHistory = [this.emptyTaskTypeMetricSample()]
+    this.slotUtilizationHistory = [this.emptyTaskTypeMetricSample()]
+    this.syncMatchRateHistory = [this.emptyTaskTypeMetricSample()]
+    this.backlogHistory = [this.emptyTaskTypeMetricSample()]
+    this.cpuUtilizationHistory = []
+    this.memoryUtilizationHistory = []
+    this.ioUtilizationHistory = []
     this.cpuUtilization = 0
     this.cpuDemand = 0
     this.cpuThrottled = false
+    this.memoryPressureUntil = 0
     this.ioUtilization = 0
     this.ioDemand = 0
     this.ioThrottled = false
@@ -273,6 +387,7 @@ export class Simulation {
     this.replaysStarted = 0
     this.replayCpuSeconds = 0
     this.syncCapacity()
+    this.initializeResourceUtilizationHistories()
   }
 
   getSnapshot(): SimulationSnapshot {
@@ -308,6 +423,7 @@ export class Simulation {
       cpuThrottled: this.cpuThrottled,
       memoryUtilization: Math.min(memoryUsedMb / (this.config.memoryCapacityMb * Math.max(1, workers.length)), 1),
       memoryUsedMb,
+      memoryPressure: this.time < this.memoryPressureUntil,
       ioUtilization: this.ioUtilization,
       ioDemand: this.ioDemand,
       ioThrottled: this.ioThrottled,
@@ -334,7 +450,18 @@ export class Simulation {
       },
       slotResidenceHistory: this.slotResidenceHistory.map((sample) => ({ ...sample })),
       taskThroughputHistory: this.taskThroughputHistory.map((sample) => ({ ...sample })),
+      taskLatencyHistory: this.taskLatencyHistory.map((sample) => ({ ...sample })),
+      taskDistribution: this.currentTaskDistribution(),
+      roundTaskThroughput: this.currentRoundTaskThroughput(),
+      roundTaskThroughputHistory: this.roundTaskThroughputHistory.map((sample) => ({ ...sample })),
       workflowCompletionHistory: this.workflowCompletionHistory.map((sample) => ({ ...sample })),
+      pollerBusyRatioHistory: this.pollerBusyRatioHistory.map((sample) => ({ ...sample })),
+      slotUtilizationHistory: this.slotUtilizationHistory.map((sample) => ({ ...sample })),
+      syncMatchRateHistory: this.syncMatchRateHistory.map((sample) => ({ ...sample })),
+      backlogHistory: this.backlogHistory.map((sample) => ({ ...sample })),
+      cpuUtilizationHistory: this.cpuUtilizationHistory.map((sample) => ({ ...sample })),
+      memoryUtilizationHistory: this.memoryUtilizationHistory.map((sample) => ({ ...sample })),
+      ioUtilizationHistory: this.ioUtilizationHistory.map((sample) => ({ ...sample })),
       recentEvents: this.events.slice(-MAX_RECENT_EVENTS).map((event) => ({ ...event })),
     }
   }
@@ -358,6 +485,7 @@ export class Simulation {
     this.dispatch('activity')
     this.allocateResources()
     this.enforceCacheLimits()
+    this.throttledSinceLastMetricSample ||= this.time < this.memoryPressureUntil
     this.removeDrainedSlots()
     this.removeDrainedWorkers()
     this.completions = this.completions.filter(
@@ -367,6 +495,9 @@ export class Simulation {
       (record) => record.timestamp > this.time - METRIC_WINDOW_SECONDS,
     )
     this.taskCompletions = this.taskCompletions.filter(
+      (record) => record.timestamp > this.time - METRIC_WINDOW_SECONDS,
+    )
+    this.taskDeliveries = this.taskDeliveries.filter(
       (record) => record.timestamp > this.time - METRIC_WINDOW_SECONDS,
     )
     const tickNumber = Math.round(this.time / TICK_SECONDS)
@@ -386,11 +517,35 @@ export class Simulation {
         throttled,
         replaying,
       })
+      this.taskLatencyHistory.push(this.metricSample(this.currentTaskLatency(), throttled, replaying))
+      this.recordRoundTaskThroughputSample(throttled, replaying)
       this.workflowCompletionHistory.push({
         timestamp: this.time,
         value: this.currentWorkflowCompletionRate(),
         throttled,
         replaying,
+      })
+      this.pollerBusyRatioHistory.push(this.metricSample(this.currentPollerBusyRatio(), throttled, replaying))
+      this.slotUtilizationHistory.push(this.metricSample(this.currentSlotUtilization(), throttled, replaying))
+      this.syncMatchRateHistory.push(this.metricSample(this.currentSyncMatchRate(), throttled, replaying))
+      this.backlogHistory.push(this.metricSample(this.currentBacklog(), throttled, replaying))
+      this.cpuUtilizationHistory.push({
+        timestamp: this.time,
+        value: this.cpuUtilization,
+        throttled: this.cpuThrottled,
+        replaying: false,
+      })
+      this.memoryUtilizationHistory.push({
+        timestamp: this.time,
+        value: this.currentMemoryUtilization(),
+        throttled: this.time < this.memoryPressureUntil,
+        replaying: false,
+      })
+      this.ioUtilizationHistory.push({
+        timestamp: this.time,
+        value: this.ioUtilization,
+        throttled: this.ioThrottled,
+        replaying: false,
       })
       this.throttledSinceLastMetricSample = false
       this.replayingSinceLastMetricSample = false
@@ -406,6 +561,143 @@ export class Simulation {
     const workflow = this.taskCompletions.filter((record) => record.type === 'workflow').length / METRIC_WINDOW_SECONDS
     const activity = this.taskCompletions.filter((record) => record.type === 'activity').length / METRIC_WINDOW_SECONDS
     return { total: workflow + activity, workflow, activity }
+  }
+
+  private currentTaskLatency(): Pick<TaskTypeMetricSample, 'total' | 'workflow' | 'activity'> {
+    const cutoff = this.time - METRIC_WINDOW_SECONDS
+    const recent = this.taskLatencies.filter((record) => record.timestamp > cutoff)
+    const average = (type?: TaskType) => {
+      const records = type ? recent.filter((record) => record.type === type) : recent
+      return records.length === 0
+        ? 0
+        : records.reduce((sum, record) => sum + record.seconds, 0) / records.length
+    }
+    return { total: average(), workflow: average('workflow'), activity: average('activity') }
+  }
+
+  private currentTaskDistribution(): TaskDistribution {
+    const round = this.loadTestRound
+    const empty = () => this.taskDistributionStats([], 0)
+    if (!round) return { total: empty(), workflow: empty(), activity: empty() }
+    const endedAt = round.endedAt ?? this.time
+    const elapsed = Math.max(endedAt - round.startedAt, 0)
+    const records = this.taskLatencies
+      .slice(round.latencyBaseline)
+      .filter((record) => record.timestamp <= endedAt)
+    return {
+      total: this.taskDistributionStats(records, elapsed),
+      workflow: this.taskDistributionStats(records.filter((record) => record.type === 'workflow'), elapsed),
+      activity: this.taskDistributionStats(records.filter((record) => record.type === 'activity'), elapsed),
+    }
+  }
+
+  private taskDistributionStats(records: TaskLatencyRecord[], elapsed: number): TaskDistributionStats {
+    const values = records.map((record) => record.seconds).sort((left, right) => left - right)
+    const percentile = (fraction: number) => {
+      if (values.length === 0) return 0
+      return values[Math.max(0, Math.ceil(values.length * fraction) - 1)]
+    }
+    return {
+      completed: values.length,
+      throughput: elapsed === 0 ? 0 : values.length / elapsed,
+      averageLatency: values.length === 0 ? 0 : values.reduce((sum, value) => sum + value, 0) / values.length,
+      p25Latency: percentile(0.25),
+      p50Latency: percentile(0.5),
+      p75Latency: percentile(0.75),
+      p95Latency: percentile(0.95),
+      p99Latency: percentile(0.99),
+      maxLatency: values.at(-1) ?? 0,
+    }
+  }
+
+  private emptyTaskTypeMetricSample(): TaskTypeMetricSample {
+    return { timestamp: 0, total: 0, workflow: 0, activity: 0, throttled: false, replaying: false }
+  }
+
+  private initializeResourceUtilizationHistories(): void {
+    this.cpuUtilizationHistory = [{ timestamp: this.time, value: this.cpuUtilization, throttled: false, replaying: false }]
+    this.memoryUtilizationHistory = [{ timestamp: this.time, value: this.currentMemoryUtilization(), throttled: false, replaying: false }]
+    this.ioUtilizationHistory = [{ timestamp: this.time, value: this.ioUtilization, throttled: false, replaying: false }]
+  }
+
+  private currentMemoryUtilization(): number {
+    const capacity = this.config.memoryCapacityMb * Math.max(1, this.workers.size)
+    return Math.min(this.currentMemoryUsedMb() / capacity, 1)
+  }
+
+  private metricSample(
+    values: Pick<TaskTypeMetricSample, 'total' | 'workflow' | 'activity'>,
+    throttled: boolean,
+    replaying: boolean,
+  ): TaskTypeMetricSample {
+    return { timestamp: this.time, ...values, throttled, replaying }
+  }
+
+  private currentPollerBusyRatio(): Pick<TaskTypeMetricSample, 'total' | 'workflow' | 'activity'> {
+    const ratio = (pollers: Poller[]) => pollers.length === 0
+      ? 0
+      : pollers.filter((poller) => poller.state !== 'long-polling').length / pollers.length
+    const workflow = ratio(this.workflowPollers)
+    const activity = ratio(this.activityPollers)
+    return { total: Math.max(workflow, activity), workflow, activity }
+  }
+
+  private currentSlotUtilization(): Pick<TaskTypeMetricSample, 'total' | 'workflow' | 'activity'> {
+    const ratio = (slots: Slot[]) => slots.length === 0
+      ? 0
+      : slots.filter((slot) => slot.taskId !== undefined).length / slots.length
+    const workflow = ratio(this.workflowSlots)
+    const activity = ratio(this.activitySlots)
+    return { total: Math.max(workflow, activity), workflow, activity }
+  }
+
+  private currentSyncMatchRate(): Pick<TaskTypeMetricSample, 'total' | 'workflow' | 'activity'> {
+    const rate = (type?: TaskType) => {
+      const records = type ? this.taskDeliveries.filter((record) => record.type === type) : this.taskDeliveries
+      return records.length === 0 ? 0 : records.filter((record) => record.syncMatched).length / records.length
+    }
+    const workflow = rate('workflow')
+    const activity = rate('activity')
+    return { total: Math.max(workflow, activity), workflow, activity }
+  }
+
+  private currentBacklog(): Pick<TaskTypeMetricSample, 'total' | 'workflow' | 'activity'> {
+    const workflow = this.workflowQueue.length
+    const activity = this.activityQueue.length
+    return { total: workflow + activity, workflow, activity }
+  }
+
+  private currentRoundTaskThroughput(): RoundTaskThroughputSample | null {
+    const round = this.taskThroughputRound
+    if (!round) return this.roundTaskThroughputHistory.at(-1) ?? null
+    const elapsedSeconds = this.round(this.time - round.startedAt)
+    const workflowCompleted = this.taskCompletionTotals.workflow - round.workflowBaseline
+    const activityCompleted = this.taskCompletionTotals.activity - round.activityBaseline
+    const workflow = elapsedSeconds === 0 ? 0 : workflowCompleted / elapsedSeconds
+    const activity = elapsedSeconds === 0 ? 0 : activityCompleted / elapsedSeconds
+    return {
+      timestamp: this.time,
+      roundId: round.id,
+      elapsedSeconds,
+      total: workflow + activity,
+      workflow,
+      activity,
+      throttled: false,
+      replaying: false,
+    }
+  }
+
+  private recordRoundTaskThroughputSample(throttled: boolean, replaying: boolean): void {
+    const sample = this.currentRoundTaskThroughput()
+    if (!sample || !this.taskThroughputRound) return
+    sample.throttled = throttled
+    sample.replaying = replaying
+    const last = this.roundTaskThroughputHistory.at(-1)
+    if (last?.roundId === sample.roundId && last.timestamp === sample.timestamp) {
+      this.roundTaskThroughputHistory[this.roundTaskThroughputHistory.length - 1] = sample
+    } else {
+      this.roundTaskThroughputHistory.push(sample)
+    }
   }
 
   private currentWorkflowCompletionRate(): number {
@@ -484,9 +776,11 @@ export class Simulation {
     if (workflow.workflowTaskOutstanding) return
     const resourceProfile = this.config.workflowTaskResourceProfile
     const resourceDemand = this.taskResourceDemand('workflow', resourceProfile)
-    const resourceWork = this.taskResourceWork('workflow', resourceProfile)
+    const taskOrdinal = this.nextWorkflowTaskId++
+    const executionDurationSeconds = this.taskExecutionDuration('workflow', taskOrdinal)
+    const resourceWork = this.taskResourceWork('workflow', resourceProfile, executionDurationSeconds)
     const task: WorkflowTask = {
-      id: `workflow-task-${this.nextWorkflowTaskId++}`,
+      id: `workflow-task-${taskOrdinal}`,
       workflowId: workflow.id,
       type: 'workflow',
       phase,
@@ -503,6 +797,7 @@ export class Simulation {
       maxIoDemand: resourceProfile === 'io' ? resourceDemand : 0,
       resourceProfile,
       executionPhase: 'decision',
+      executionDurationSeconds,
       replayCpuWorkRemaining: 0,
       replayCpuWorkTotal: 0,
       routingState: source && workflow.cachedWorkerId ? 'sticky-wait' : 'shared-queue',
@@ -600,6 +895,11 @@ export class Simulation {
           candidate.workerId === worker.id && candidate.state === 'available',
         )!
         queue.splice(queueIndex, 1)
+        this.taskDeliveries.push({
+          timestamp: this.time,
+          type,
+          syncMatched: this.time - (task.pollEligibleAt ?? this.time) <= TICK_SECONDS / 2,
+        })
       task.state = 'acquired'
       task.dispatchStartedAt = this.time
       task.dispatchRemaining = POLL_DISPATCH_SECONDS
@@ -722,8 +1022,8 @@ export class Simulation {
       )
       const desiredIo = ioActive.reduce((sum, task) => sum + task.maxIoDemand, 0)
       worker.ioDemand = desiredIo
-      worker.ioUtilization = Math.min(desiredIo / IO_CAPACITY, 1)
-      const ioScale = resourceProgressScale(desiredIo, IO_CAPACITY, {
+      worker.ioUtilization = Math.min(desiredIo / this.config.ioCapacity, 1)
+      const ioScale = resourceProgressScale(desiredIo, this.config.ioCapacity, {
         knee: IO_CONTENTION_KNEE,
         maxSpeedLoss: IO_MAX_CONTENTION_SPEED_LOSS,
       })
@@ -739,7 +1039,7 @@ export class Simulation {
     this.cpuUtilization = Math.min(this.cpuDemand / (this.config.cpuCapacity * workerCount), 1)
     this.cpuThrottled = [...this.workers.values()].some((worker) => worker.cpuThrottled)
     this.ioDemand = this.round([...this.workers.values()].reduce((sum, worker) => sum + worker.ioDemand, 0))
-    this.ioUtilization = Math.min(this.ioDemand / (IO_CAPACITY * workerCount), 1)
+    this.ioUtilization = Math.min(this.ioDemand / (this.config.ioCapacity * workerCount), 1)
     this.ioThrottled = [...this.workers.values()].some((worker) => worker.ioThrottled)
     this.throttledSinceLastMetricSample ||= this.cpuThrottled || this.ioThrottled
 
@@ -794,6 +1094,12 @@ export class Simulation {
     task.state = 'completed'
     task.completedAt = this.time
     this.taskCompletions.push({ timestamp: this.time, type: task.type })
+    this.taskLatencies.push({
+      timestamp: this.time,
+      type: task.type,
+      seconds: this.round(this.time - task.scheduledAt),
+    })
+    this.taskCompletionTotals[task.type] += 1
     const workflow = this.workflows.get(task.workflowId)!
     if (task.type === 'workflow') {
       workflow.historyUnits += 1
@@ -861,7 +1167,11 @@ export class Simulation {
       taskId: task.id,
       workerId,
     })
-    const replayCpuWork = this.round(Math.max(1, workflow.historyUnits) * REPLAY_CPU_PER_HISTORY_UNIT)
+    const replayCpuWork = this.round(
+      Math.max(1, workflow.historyUnits)
+      * this.config.workflowTaskReplayLatencySeconds
+      * REPLAY_CPU_DEMAND,
+    )
     task.executionPhase = 'replay'
     task.replayCpuWorkRemaining = replayCpuWork
     task.replayCpuWorkTotal = replayCpuWork
@@ -948,6 +1258,12 @@ export class Simulation {
       workflow.lastCacheAccessAt = null
     }
     this.cacheEvictions += 1
+    if (reason === 'MEMORY_PRESSURE') {
+      this.memoryPressureUntil = Math.max(
+        this.memoryPressureUntil,
+        this.round(this.time + MEMORY_PRESSURE_PULSE_SECONDS),
+      )
+    }
     this.emit('CACHE_EVICTED', {
       workflowId: oldest.workflowId,
       workerId: oldest.workerId,
@@ -1015,7 +1331,7 @@ export class Simulation {
       if (task.type !== type) continue
       if (task.state === 'running' || task.state === 'returning' || task.state === 'completed') continue
       const resourceDemand = this.taskResourceDemand(task.type, profile)
-      const resourceWork = this.taskResourceWork(task.type, profile)
+      const resourceWork = this.taskResourceWork(task.type, profile, task.executionDurationSeconds)
       task.resourceProfile = profile
       task.cpuWorkRemaining = profile === 'cpu' ? resourceWork : 0
       task.maxCpuDemand = profile === 'cpu' ? resourceDemand : 0
@@ -1044,12 +1360,14 @@ export class Simulation {
     const activityTaskIds: string[] = []
     const resourceProfile = this.config.activityTaskResourceProfile
     const resourceDemand = this.taskResourceDemand('activity', resourceProfile)
-    const resourceWork = this.taskResourceWork('activity', resourceProfile)
     for (let batchIndex = 0; batchIndex < batchSize; batchIndex += 1) {
       const activityIndex = workflow.activitiesScheduled + 1
       workflow.activitiesScheduled = activityIndex
+      const taskOrdinal = this.nextActivityTaskId++
+      const executionDurationSeconds = this.taskExecutionDuration('activity', taskOrdinal)
+      const resourceWork = this.taskResourceWork('activity', resourceProfile, executionDurationSeconds)
       const task: ActivityTask = {
-        id: `activity-task-${this.nextActivityTaskId++}`,
+        id: `activity-task-${taskOrdinal}`,
         workflowId: workflow.id,
         type: 'activity',
         activityIndex,
@@ -1066,6 +1384,7 @@ export class Simulation {
         maxIoDemand: resourceProfile === 'io' ? resourceDemand : 0,
         resourceProfile,
         executionPhase: 'activity',
+        executionDurationSeconds,
         replayCpuWorkRemaining: 0,
         replayCpuWorkTotal: 0,
         sourceSlotId: sourceTask.assignedSlotId,
@@ -1256,11 +1575,23 @@ export class Simulation {
     return profile === 'cpu' ? this.config.activityTaskCpuDemand : this.config.activityTaskIoDemand
   }
 
-  private taskResourceWork(type: TaskType, profile: TaskResourceProfile): number {
-    const duration = type === 'workflow'
-      ? profile === 'cpu' ? WORKFLOW_CPU_BASE_DURATION_SECONDS : WORKFLOW_IO_BASE_DURATION_SECONDS
-      : profile === 'cpu' ? ACTIVITY_CPU_BASE_DURATION_SECONDS : ACTIVITY_IO_BASE_DURATION_SECONDS
+  private taskResourceWork(type: TaskType, profile: TaskResourceProfile, duration: number): number {
     return this.round(this.taskResourceDemand(type, profile) * duration)
+  }
+
+  private taskExecutionDuration(type: TaskType, ordinal: number): number {
+    const baseDuration = type === 'workflow'
+      ? this.config.workflowTaskBaseDurationSeconds
+      : this.config.activityTaskBaseDurationSeconds
+    const jitterPercent = type === 'workflow'
+      ? this.config.workflowTaskDurationJitterPercent
+      : this.config.activityTaskDurationJitterPercent
+    if (jitterPercent === 0) return baseDuration
+    const seedOffset = (Math.abs(this.seed) % 997) / 997
+    const typeOffset = type === 'workflow' ? 0.271_828_182_84 : 0.618_033_988_75
+    const sample = (seedOffset + typeOffset + (ordinal - 1) * 0.754_877_666_25) % 1
+    const multiplier = 1 + (sample * 2 - 1) * jitterPercent / 100
+    return this.round(Math.max(TICK_SECONDS, baseDuration * multiplier))
   }
 
   private emit(type: string, data: Omit<SemanticEvent, 'id' | 'timestamp' | 'type'>): void {

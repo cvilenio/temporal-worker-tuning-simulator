@@ -40,9 +40,19 @@ describe('Task state consistency', () => {
   })
 
   it('emits acquisition, Slot dispatch, running, and completion in order', () => {
-    const simulation = new Simulation({ workflowStartRate: 0, activitiesPerWorkflow: 1 })
+    const simulation = new Simulation({
+      workflowStartRate: 0,
+      activitiesPerWorkflow: 1,
+      workflowTaskBaseDurationSeconds: 0.05,
+      activityTaskBaseDurationSeconds: 0.5,
+    })
     simulation.startWorkflow()
-    runFor(simulation, 4.2)
+    for (let tick = 0; tick < 200; tick += 1) {
+      simulation.step(TICK_SECONDS)
+      if (simulation.getEventsSince(0).some((event) =>
+        event.type === 'WORKFLOW_TASK_COMPLETED' && event.taskId === 'workflow-task-1',
+      )) break
+    }
     const events = simulation.getEventsSince(0)
     const types = events
       .filter((event) => event.taskId === 'workflow-task-1')

@@ -1,6 +1,6 @@
 import type { MetricSample } from '../simulation'
 import { AutoPauseLegend, AutoPauseMarkers } from './ChartLifecycleMarkers'
-import { ReplayBands, ReplayLegend, ThrottleBands, ThrottleLegend } from './ThrottleBands'
+import { ThrottleBands, ThrottleLegend } from './ThrottleBands'
 
 const WIDTH = 1200
 const HEIGHT = 180
@@ -46,7 +46,6 @@ export function SlotResidenceChart({
         <div className="chart-status">
           <strong>{currentValue.toFixed(2)}s</strong>
           <ThrottleLegend />
-          <ReplayLegend />
           <AutoPauseLegend />
         </div>
       </div>
@@ -59,7 +58,6 @@ export function SlotResidenceChart({
         data-sample-count={samples.length}
       >
         <ThrottleBands samples={samples} maxTime={maxTime} left={LEFT} top={TOP} plotWidth={PLOT_WIDTH} plotHeight={PLOT_HEIGHT} />
-        <ReplayBands samples={samples} maxTime={maxTime} left={LEFT} top={TOP} plotWidth={PLOT_WIDTH} plotHeight={PLOT_HEIGHT} />
         {[0, 0.5, 1].map((fraction) => {
           const y = TOP + PLOT_HEIGHT - fraction * PLOT_HEIGHT
           return <line key={fraction} x1={LEFT} y1={y} x2={WIDTH - RIGHT} y2={y} className="chart-grid-line" />

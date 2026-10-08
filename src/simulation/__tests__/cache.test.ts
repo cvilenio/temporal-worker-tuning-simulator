@@ -3,6 +3,7 @@ import {
   ACTIVE_TASK_MEMORY_MB,
   BASE_WORKER_MEMORY_MB,
   CACHED_WORKFLOW_MEMORY_MB,
+  MEMORY_PRESSURE_PULSE_SECONDS,
   Simulation,
   TICK_SECONDS,
 } from '..'
@@ -309,13 +310,14 @@ describe('Workflow cache', () => {
     })
     simulation.startWorkflow()
 
-    for (let tick = 0; tick < Math.round(30 / TICK_SECONDS); tick += 1) {
+    for (let tick = 0; tick < Math.round(60 / TICK_SECONDS); tick += 1) {
       simulation.step(TICK_SECONDS)
       expect(simulation.getSnapshot().workflowCache).toHaveLength(0)
       if (simulation.getSnapshot().workflows[0]?.state === 'completed') break
     }
 
     const events = simulation.getEventsSince(0)
+    expect(simulation.getSnapshot().workflows[0]?.state).toBe('completed')
     expect(events.filter((event) => event.type === 'CACHE_INSERTED')).toHaveLength(0)
     expect(events.filter((event) => event.type === 'REPLAY_STARTED')).toHaveLength(4)
   })
@@ -353,8 +355,34 @@ describe('Workflow cache', () => {
     const started = events.find((event) => event.type === 'REPLAY_STARTED')!
     const completed = events.find((event) => event.type === 'REPLAY_COMPLETED')!
 
-    expect(started.replayCpuSeconds).toBe(0.12)
-    expect(completed.timestamp - started.timestamp).toBeGreaterThanOrEqual(0.35)
+    expect(started.replayCpuSeconds).toBe(0.3)
+    expect(completed.timestamp - started.timestamp).toBeGreaterThanOrEqual(0.95)
+  })
+
+  it('runs configurable replay before base Workflow Task execution', () => {
+    const simulation = new Simulation({
+      workflowStartRate: 0,
+      activitiesPerWorkflow: 1,
+      activitySlots: 0,
+      workflowCacheCapacity: 0,
+      cpuCapacity: 1,
+      workflowTaskCpuDemand: 0.25,
+      workflowTaskBaseDurationSeconds: 1,
+      workflowTaskDurationJitterPercent: 0,
+      workflowTaskReplayLatencySeconds: 0.8,
+    })
+    simulation.startWorkflow()
+    runUntil(simulation, () => simulation.getEventsSince(0).some((event) =>
+      event.type === 'WORKFLOW_TASK_RETURN_STARTED',
+    ))
+    const events = simulation.getEventsSince(0)
+    const replayStarted = events.find((event) => event.type === 'REPLAY_STARTED')!
+    const replayCompleted = events.find((event) => event.type === 'REPLAY_COMPLETED')!
+    const returnStarted = events.find((event) => event.type === 'WORKFLOW_TASK_RETURN_STARTED')!
+
+    expect(replayStarted.replayCpuSeconds).toBe(0.24)
+    expect(replayCompleted.timestamp - replayStarted.timestamp).toBeGreaterThanOrEqual(0.75)
+    expect(returnStarted.timestamp - replayCompleted.timestamp).toBeGreaterThanOrEqual(1)
   })
 
   it('keeps replay in Workflow Slots longer under shared CPU contention', () => {
@@ -763,6 +791,7 @@ describe('Workflow cache', () => {
     simulation.updateConfig({ memoryCapacityMb: 64 })
     let snapshot = simulation.getSnapshot()
     expect(snapshot.workflowCache).toHaveLength(11)
+    expect(snapshot.memoryPressure).toBe(true)
     expect(simulation.getEventsSince(0).filter((event) =>
       event.type === 'CACHE_EVICTED' && event.reason === 'MEMORY_PRESSURE',
     )).toHaveLength(1)
@@ -771,6 +800,9 @@ describe('Workflow cache', () => {
     snapshot = simulation.getSnapshot()
     expect(snapshot.workflowCache).toHaveLength(11)
     expect(snapshot.workflows.every((workflow) => workflow.state !== 'completed')).toBe(true)
+
+    simulation.step(MEMORY_PRESSURE_PULSE_SECONDS + TICK_SECONDS)
+    expect(simulation.getSnapshot().memoryPressure).toBe(false)
   })
 
   it('does not change Activity execution semantics when cache capacity changes', () => {

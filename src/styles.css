@@ -43,10 +43,11 @@ button:disabled { opacity: 0.45; }
 main { max-width: 1440px; margin: 0 auto; padding: 1rem 1.25rem 2rem; }
 header { display: flex; justify-content: space-between; align-items: end; gap: 2rem; }
 h1 { margin: 0; font-size: 1.35rem; font-weight: 650; }
-header p { margin: 0.35rem 0 0; color: var(--color-text-muted); font-size: 0.9rem; }
 .clock { color: var(--color-text-muted); white-space: nowrap; }
 .clock strong { color: var(--color-text); }
 .workflow-generation-controls { display: grid; grid-template-columns: auto minmax(300px, 1fr) auto; align-items: center; gap: 0.65rem 1rem; margin: 1rem 0 0.65rem; padding: 0.7rem 0.8rem; border: 1px solid var(--color-border); border-radius: 6px; background: var(--color-surface); }
+.simulation-time-controls { grid-column: 1 / -1; display: flex; align-items: center; padding-bottom: 0.65rem; border-bottom: 1px solid var(--color-border); }
+.generation-config-label { grid-column: 1 / -1; color: var(--color-text-muted); font-size: 0.72rem; font-weight: 650; letter-spacing: 0.06em; text-transform: uppercase; }
 .generation-mode { display: flex; gap: 0.8rem; color: var(--color-text-secondary); font-size: 0.82rem; }
 .generation-mode label { display: flex; align-items: center; gap: 0.3rem; }
 .top-count-control, .top-rate-control { display: flex; align-items: center; gap: 0.65rem; color: var(--color-text-secondary); font-size: 0.8rem; }
@@ -56,15 +57,32 @@ header p { margin: 0.35rem 0 0; color: var(--color-text-muted); font-size: 0.9re
 .top-rate-control input, .top-rate-control select { color: var(--color-text); background: var(--color-inset); border: 1px solid var(--color-border-strong); border-radius: 4px; padding: 0.35rem; }
 .generation-actions { display: flex; align-items: center; gap: 0.45rem; }
 .generation-actions .start-workflow-button { width: auto; min-width: 150px; margin: 0; }
-.workflow-shape-controls { grid-column: 1 / -1; border-top: 1px solid var(--color-border); padding-top: 0.5rem; }
-.workflow-shape-controls summary { width: fit-content; cursor: pointer; color: var(--color-text-secondary); font-size: 0.8rem; }
-.workflow-shape-controls p { margin: 0.45rem 0 0; color: var(--color-text-muted); font-size: 0.72rem; }
+.simulator-config { grid-column: 1 / -1; border-top: 1px solid var(--color-border); padding-top: 0.5rem; }
+.simulator-config-title { color: var(--color-text-secondary); font-size: 0.8rem; }
+.simulator-config-sections { margin-top: 0.5rem; border: 1px solid var(--color-border); border-radius: 4px; background: var(--color-inset); }
+.preset-control { display: flex; width: min(420px, 100%); align-items: center; gap: 0.75rem; padding: 0.55rem 0.65rem; color: var(--color-text-secondary); font-size: 0.8rem; }
+.preset-control span { min-width: 90px; }
+.preset-control select { flex: 1; color: var(--color-text); background: var(--color-panel); border: 1px solid var(--color-border-strong); border-radius: 4px; padding: 0.35rem 0.45rem; }
+.custom-settings { border-top: 1px solid var(--color-border); }
+.custom-settings > summary { cursor: pointer; padding: 0.55rem 0.65rem; color: var(--color-text-secondary); font-size: 0.8rem; }
+.custom-settings-sections { border-top: 1px solid var(--color-border); }
+.config-section + .config-section { border-top: 1px solid var(--color-border); }
+.config-section > summary { cursor: pointer; padding: 0.55rem 0.65rem; color: var(--color-text-secondary); font-size: 0.8rem; }
+.config-section-content { padding: 0 0.7rem 0.7rem; }
+.workflow-shape-controls p { margin: 0 0 0.45rem; color: var(--color-text-muted); font-size: 0.72rem; }
 .workflow-shape-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; padding-top: 0.35rem; }
 .workflow-shape-tally { display: flex; gap: 1.25rem; margin-top: 0.45rem; padding-top: 0.5rem; border-top: 1px solid var(--color-border); color: var(--color-text-secondary); font-size: 0.76rem; }
 .workflow-shape-tally strong { color: var(--color-text); font-variant-numeric: tabular-nums; }
 .simulation-panel { padding: 0.75rem 0.9rem 0.9rem; border: 1px solid var(--color-border); border-radius: 6px; background: var(--color-surface); }
 .simulation-panel h2 { margin: 0 0 0.55rem; color: var(--color-text); font-size: 0.95rem; font-weight: 650; text-transform: uppercase; }
 .simulation-scene { display: block; width: 100%; border: 1px solid var(--color-border); border-radius: 6px; background: var(--color-surface); }
+.monitoring-panel { margin-top: 0.75rem; border: 1px solid var(--color-border); border-radius: 6px; background: var(--color-surface); }
+.monitoring-panel > summary { cursor: pointer; padding: 0.75rem 0.9rem; color: var(--color-text); font-size: 0.95rem; font-weight: 650; }
+.monitoring-sections { border-top: 1px solid var(--color-border); }
+.monitoring-section + .monitoring-section { border-top: 1px solid var(--color-border); }
+.monitoring-section > summary { cursor: pointer; padding: 0.65rem 0.9rem; color: var(--color-text-secondary); font-size: 0.85rem; font-weight: 650; }
+.monitoring-charts { padding: 0 0.8rem 0.8rem; border-top: 1px solid var(--color-border); }
+.monitoring-charts .chart-panel:first-child { margin-top: 0.8rem; }
 .region { fill: var(--color-surface); stroke: var(--color-border-strong); stroke-width: 1.5; }
 .temporal-region { fill: var(--color-surface); }
 .worker-region { fill: var(--color-surface); }
@@ -102,7 +120,6 @@ header p { margin: 0.35rem 0 0; color: var(--color-text-muted); font-size: 0.9re
 .workflow-warm-label { fill: var(--color-inset); font-size: 6px; font-weight: 900; pointer-events: none; }
 .worker-cache-card { fill: var(--color-surface); stroke: var(--color-border-strong); stroke-width: 0.75; }
 .worker-card-outline { fill: none; stroke: var(--color-border); stroke-width: 1; }
-.worker-card-heading { fill: var(--color-text); font-size: 13px; font-weight: 750; letter-spacing: 0.8px; }
 .worker-card-title { fill: var(--color-text-secondary); font-size: 9px; font-weight: 800; letter-spacing: 0.5px; }
 .cache-cell { fill: var(--color-inset); stroke: var(--color-border-strong); stroke-width: 1; }
 .cache-cell.occupied { fill: var(--color-surface); stroke: var(--color-border-strong); }
@@ -161,10 +178,9 @@ header p { margin: 0.35rem 0 0; color: var(--color-text-muted); font-size: 0.9re
 .chart-header p { margin: 0.2rem 0 0; color: var(--color-text-muted); font-size: 0.75rem; }
 .chart-header strong { color: var(--color-text); font-size: 1rem; font-variant-numeric: tabular-nums; }
 .chart-status { display: flex; flex-direction: column; align-items: end; gap: 0.25rem; }
-.chart-throttle-key, .chart-replay-key, .chart-auto-pause-key { display: inline-flex; align-items: center; gap: 0.35rem; color: var(--color-text-secondary); font-size: 0.68rem; font-weight: 500; }
-.chart-throttle-key i, .chart-replay-key i { width: 14px; height: 8px; }
+.chart-throttle-key, .chart-auto-pause-key { display: inline-flex; align-items: center; gap: 0.35rem; color: var(--color-text-secondary); font-size: 0.68rem; font-weight: 500; }
+.chart-throttle-key i { width: 14px; height: 8px; }
 .chart-throttle-key i { border: 1px solid color-mix(in srgb, var(--color-danger) 75%, transparent); background: color-mix(in srgb, var(--color-danger) 24%, transparent); }
-.chart-replay-key i { border: 1px solid color-mix(in srgb, var(--color-replay) 80%, transparent); background: color-mix(in srgb, var(--color-replay) 28%, transparent); }
 .chart-auto-pause-key i { width: 8px; height: 11px; border-left: 1px dashed var(--color-pause); }
 .slot-residence-chart, .task-throughput-chart, .workflow-completion-chart { display: block; width: 100%; margin-top: 0.35rem; }
 .chart-legend { display: flex; flex-wrap: wrap; gap: 1rem; margin-top: 0.45rem; color: var(--color-text-muted); font-size: 0.72rem; }
@@ -172,7 +188,6 @@ header p { margin: 0.35rem 0 0; color: var(--color-text-muted); font-size: 0.9re
 .legend-swatch { display: inline-block; width: 18px; height: 2px; }
 .chart-grid-line { stroke: var(--color-border); stroke-width: 1; stroke-dasharray: 3 5; }
 .chart-throttle-band { fill: var(--color-danger); fill-opacity: 0.24; }
-.chart-replay-band { fill: var(--color-replay); fill-opacity: 0.28; }
 .chart-auto-pause-line { stroke: var(--color-pause); stroke-width: 1.5; stroke-dasharray: 5 5; vector-effect: non-scaling-stroke; }
 .chart-axis { stroke: var(--color-border-strong); stroke-width: 1; }
 .chart-line { fill: none; stroke: var(--color-workflow); stroke-width: 2; vector-effect: non-scaling-stroke; }
@@ -180,24 +195,30 @@ header p { margin: 0.35rem 0 0; color: var(--color-text-muted); font-size: 0.9re
 .chart-line.throughput-workflow { stroke: var(--color-workflow); }
 .chart-line.throughput-activity { stroke: var(--color-activity); }
 .chart-line.workflow-completion-line { stroke: var(--color-success); }
+.chart-line.resource-cpu { stroke: var(--color-cpu); }
+.chart-line.resource-memory { stroke: var(--color-magenta); }
+.chart-line.resource-io { stroke: var(--color-io); }
 .legend-swatch.throughput-total { background: var(--color-text); }
 .legend-swatch.throughput-workflow { background: var(--color-workflow); }
 .legend-swatch.throughput-activity { background: var(--color-activity); }
 .chart-label { fill: var(--color-text-muted); font-size: 11px; font-variant-numeric: tabular-nums; }
-.controls { display: grid; gap: 0.7rem; margin-top: 0.75rem; padding: 0.8rem; border: 1px solid var(--color-border); border-radius: 6px; background: var(--color-surface); }
-.transport-controls { display: flex; align-items: center; gap: 0.45rem; }
+.load-test-table-scroll { margin-top: 0.75rem; overflow-x: auto; }
+.load-test-table { width: 100%; border-collapse: collapse; color: var(--color-text-secondary); font-family: var(--font-secondary); font-size: 0.75rem; font-variant-numeric: tabular-nums; }
+.load-test-table th, .load-test-table td { padding: 0.55rem 0.65rem; border-top: 1px solid var(--color-border); text-align: right; white-space: nowrap; }
+.load-test-table thead th { color: var(--color-text-muted); font-weight: 400; }
+.load-test-table th:first-child { text-align: left; }
+.load-test-table tbody th { color: var(--color-text); font-weight: 400; }
 .speed-control { display: flex; align-items: center; gap: 0.45rem; margin-left: auto; color: var(--color-text-secondary); font-size: 0.85rem; }
 .speed-control input[type='range'] { width: 180px; }
 .speed-number { width: 4.4rem; color: var(--color-text); background: var(--color-inset); border: 1px solid var(--color-border-strong); border-radius: 4px; padding: 0.35rem; }
 .speed-control button.active { border-color: var(--color-control); color: var(--color-text); }
-.control-grid { display: block; }
-fieldset { min-width: 0; margin: 0; padding: 0.6rem 0.75rem 0.75rem; border: 1px solid var(--color-border); border-radius: 4px; }
-legend { padding: 0 0.35rem; color: var(--color-text-secondary); font-size: 0.82rem; }
 .range-control { display: grid; grid-template-columns: 155px 1fr 78px; align-items: center; gap: 0.65rem; margin: 0.45rem 0; color: var(--color-text-secondary); font-size: 0.8rem; }
 .range-control output { color: var(--color-text); text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
-.task-resource-panel { margin-top: 0.75rem; padding: 0.65rem 0.7rem 0.45rem; border: 1px solid var(--color-border-strong); border-radius: 4px; background: var(--color-surface); }
-.task-resource-title { color: var(--color-text-secondary); font-size: 0.82rem; }
-.task-resource-header { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; }
+.worker-config-controls .range-control { width: min(760px, 100%); grid-template-columns: 210px 1fr 94px; }
+.worker-config-controls .range-control output,
+.task-resource-panel .range-control output { text-align: left; }
+.task-resource-panel { padding-top: 0.1rem; }
+.task-resource-header { display: flex; align-items: center; justify-content: flex-end; gap: 0.75rem; }
 .profile-lock { display: flex; align-items: center; gap: 0.35rem; color: var(--color-text-secondary); font-size: 0.76rem; white-space: nowrap; }
 .profile-lock input[type='checkbox'] {
   appearance: none;
@@ -217,7 +238,7 @@ legend { padding: 0 0.35rem; color: var(--color-text-secondary); font-size: 0.82
 .task-profile-group { margin-top: 0.6rem; padding-top: 0.55rem; border-top: 1px solid var(--color-border); }
 .task-profile-name { color: var(--color-text); font-size: 0.78rem; font-weight: 650; }
 .task-resource-panel .workload-mode { margin-block: 0.4rem 0.3rem; }
-.task-resource-panel .range-control { grid-template-columns: 72px 1fr 94px; }
+.task-resource-panel .range-control { width: min(760px, 100%); grid-template-columns: 190px 1fr 94px; }
 .workload-mode { display: flex; gap: 1rem; margin: 0.35rem 0 0.65rem; color: var(--color-text-secondary); font-size: 0.82rem; }
 .workload-mode label { display: flex; align-items: center; gap: 0.35rem; }
 .count-stepper { display: grid; grid-template-columns: auto minmax(70px, 1fr) auto; gap: 0.35rem; }

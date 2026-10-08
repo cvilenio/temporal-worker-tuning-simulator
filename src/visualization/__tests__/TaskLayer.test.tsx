@@ -1,6 +1,6 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
-import { defaultConfig, type SimulationSnapshot, type SimulationTask } from '../../simulation'
+import { Simulation, defaultConfig, type SimulationSnapshot, type SimulationTask } from '../../simulation'
 import { TaskLayer } from '../TaskLayer'
 
 describe('TaskLayer', () => {
@@ -39,6 +39,7 @@ describe('TaskLayer', () => {
       cpuThrottled: false,
       memoryUtilization: 0,
       memoryUsedMb: 64,
+      memoryPressure: false,
       ioUtilization: 0,
       ioDemand: 0,
       ioThrottled: false,
@@ -65,12 +66,50 @@ describe('TaskLayer', () => {
       },
       slotResidenceHistory: [{ timestamp: 0, value: 0, throttled: false, replaying: false }],
       taskThroughputHistory: [{ timestamp: 0, total: 0, workflow: 0, activity: 0, throttled: false, replaying: false }],
+      taskLatencyHistory: [{ timestamp: 0, total: 0, workflow: 0, activity: 0, throttled: false, replaying: false }],
+      taskDistribution: {
+        total: { completed: 0, throughput: 0, averageLatency: 0, p25Latency: 0, p50Latency: 0, p75Latency: 0, p95Latency: 0, p99Latency: 0, maxLatency: 0 },
+        workflow: { completed: 0, throughput: 0, averageLatency: 0, p25Latency: 0, p50Latency: 0, p75Latency: 0, p95Latency: 0, p99Latency: 0, maxLatency: 0 },
+        activity: { completed: 0, throughput: 0, averageLatency: 0, p25Latency: 0, p50Latency: 0, p75Latency: 0, p95Latency: 0, p99Latency: 0, maxLatency: 0 },
+      },
+      roundTaskThroughput: null,
+      roundTaskThroughputHistory: [],
       workflowCompletionHistory: [{ timestamp: 0, value: 0, throttled: false, replaying: false }],
+      pollerBusyRatioHistory: [{ timestamp: 0, total: 0, workflow: 0, activity: 0, throttled: false, replaying: false }],
+      slotUtilizationHistory: [{ timestamp: 0, total: 0, workflow: 0, activity: 0, throttled: false, replaying: false }],
+      syncMatchRateHistory: [{ timestamp: 0, total: 0, workflow: 0, activity: 0, throttled: false, replaying: false }],
+      backlogHistory: [{ timestamp: 0, total: 0, workflow: 0, activity: 0, throttled: false, replaying: false }],
+      cpuUtilizationHistory: [{ timestamp: 0, value: 0, throttled: false, replaying: false }],
+      memoryUtilizationHistory: [{ timestamp: 0, value: 0.15, throttled: false, replaying: false }],
+      ioUtilizationHistory: [{ timestamp: 0, value: 0, throttled: false, replaying: false }],
       recentEvents: [],
     }
 
     const markup = renderToStaticMarkup(<svg><TaskLayer snapshot={snapshot} /></svg>)
     expect(markup).toContain('data-task-id="activity-task-1"')
     expect(markup).not.toContain('NaN')
+  })
+
+  it('interpolates Task movement between fixed simulation ticks', () => {
+    const simulation = new Simulation({ workflowStartRate: 0 })
+    simulation.startWorkflow()
+    let snapshot = simulation.getSnapshot()
+    for (let tick = 0; tick < 100; tick += 1) {
+      simulation.step()
+      snapshot = simulation.getSnapshot()
+      if (snapshot.tasks.some((task) =>
+        task.id === 'workflow-task-1'
+        && task.state === 'enqueuing'
+        && snapshot.simulatedTime >= task.enqueueStartedAt,
+      )) break
+    }
+    const tickTimeMs = snapshot.simulatedTime * 1_000
+
+    const positionAt = (nowMs: number) => {
+      const markup = renderToStaticMarkup(<svg><TaskLayer snapshot={snapshot} nowMs={nowMs} /></svg>)
+      return Number(markup.match(/data-task-id="workflow-task-1"[^>]* x="([^"]+)"/)?.[1])
+    }
+
+    expect(positionAt(tickTimeMs + 25)).toBeGreaterThan(positionAt(tickTimeMs))
   })
 })

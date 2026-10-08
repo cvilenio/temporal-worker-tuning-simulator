@@ -4,6 +4,21 @@ import { Simulation } from '../../simulation'
 import { SimulationScene } from '../SimulationScene'
 
 describe('SimulationScene resources', () => {
+  it('promotes the single Worker name to the region title', () => {
+    const snapshot = new Simulation({ workflowStartRate: 0 }).getSnapshot()
+    const markup = renderToStaticMarkup(
+      <SimulationScene
+        snapshot={snapshot}
+        nowMs={0}
+        presentationNowMs={0}
+        timeline={{ workflows: new Map(), tasks: new Map() }}
+      />,
+    )
+
+    expect(markup.match(/WORKER A/g)).toHaveLength(1)
+    expect(markup).not.toContain('WORKERS (1)')
+  })
+
   it('labels multiple Workers, RPC direction, and suppresses dense Poll requests', () => {
     const compact = new Simulation({ workerCount: 2, workflowStartRate: 0 }).getSnapshot()
     const dense = new Simulation({ workerCount: 3, workflowPollers: 2, workflowStartRate: 0 }).getSnapshot()
@@ -26,6 +41,7 @@ describe('SimulationScene resources', () => {
     expect(compactMarkup).not.toContain('poller-worker-label')
     expect(compactMarkup).not.toContain('slot-worker-label')
     expect(compactMarkup).toContain('COMMANDS / RESULTS -&gt; TEMPORAL')
+    expect(compactMarkup).toMatch(/<text x="575"[^>]*text-anchor="middle"[^>]*>COMMANDS \/ RESULTS -&gt; TEMPORAL<\/text>/)
     expect(compactMarkup).toContain('aria-label="Command / result RPC"')
     expect(compactMarkup).toContain('<tspan>Command / result</tspan><tspan x="54" dy="11">RPC</tspan>')
     expect(compactMarkup).toContain('class="poll-request"')
@@ -129,6 +145,27 @@ describe('SimulationScene resources', () => {
 
     expect(markup).toContain('data-resource="cpu" data-utilization="1" data-throttled="true"')
     expect(markup).toContain('resource-fill cpu-fill throttled')
+  })
+
+  it('pulses every memory segment during memory pressure', () => {
+    const snapshot = {
+      ...new Simulation({ workflowStartRate: 0 }).getSnapshot(),
+      memoryPressure: true,
+    }
+    const markup = renderToStaticMarkup(
+      <SimulationScene
+        snapshot={snapshot}
+        nowMs={0}
+        presentationNowMs={0}
+        timeline={{ workflows: new Map(), tasks: new Map() }}
+      />,
+    )
+
+    expect(markup).toContain('data-resource="memory" data-utilization="0.15" data-throttled="true"')
+    expect(markup).toContain('resource-fill memory-base-fill throttled')
+    expect(markup).toContain('resource-fill memory-task-fill throttled')
+    expect(markup).toContain('resource-fill memory-cache-fill throttled')
+    expect(markup).toContain('Memory pressure active.')
   })
 
   it('renders warm Workflow cache entries and memory use', () => {

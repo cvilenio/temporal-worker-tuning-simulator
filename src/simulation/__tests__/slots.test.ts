@@ -10,12 +10,17 @@ describe('Slot capacity', () => {
       workflowPollers: 16,
       workflowSlots: 16,
       activityPollers: 16,
-      cpuCapacity: 16,
+      cpuCapacity: 1,
+      workflowTaskBaseDurationSeconds: 0.05,
+      workflowTaskReplayLatencySeconds: 0.05,
+      activityTaskCpuDemand: 0.05,
+      activityTaskBaseDurationSeconds: 2,
+      activityTaskDurationJitterPercent: 0,
     }
     const few = simulationWith({ ...workload, activitySlots: 2 })
     const many = simulationWith({ ...workload, activitySlots: 8 })
-    runFor(few, 10)
-    runFor(many, 10)
+    runFor(few, 20)
+    runFor(many, 20)
     expect(activityCompletions(many)).toBeGreaterThan(activityCompletions(few) * 2)
     expect(few.getSnapshot().activityQueue.length).toBeGreaterThan(0)
   })

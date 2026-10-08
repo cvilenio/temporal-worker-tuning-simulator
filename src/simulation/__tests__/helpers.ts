@@ -19,6 +19,7 @@ export function simulationWith(changes: Partial<SimulationConfig>): Simulation {
     workflowSlots: 4,
     activitySlots: 8,
     cpuCapacity: 8,
+    workflowTaskReplayLatencySeconds: 0.4,
     ...changes,
   }, 7)
 }

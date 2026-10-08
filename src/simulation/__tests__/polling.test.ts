@@ -36,12 +36,17 @@ describe('Poller capacity', () => {
       workflowPollers: 16,
       workflowSlots: 16,
       activitySlots: 16,
-      cpuCapacity: 16,
+      cpuCapacity: 1,
+      workflowTaskBaseDurationSeconds: 0.05,
+      workflowTaskReplayLatencySeconds: 0.05,
+      activityTaskCpuDemand: 0.05,
+      activityTaskBaseDurationSeconds: 0.5,
+      activityTaskDurationJitterPercent: 0,
     }
     const constrained = simulationWith({ ...workload, activityPollers: 1 })
     const expanded = simulationWith({ ...workload, activityPollers: 4 })
-    runFor(constrained, 10)
-    runFor(expanded, 10)
+    runFor(constrained, 20)
+    runFor(expanded, 20)
     expect(activityCompletions(expanded)).toBeGreaterThan(activityCompletions(constrained) * 1.3)
     expect(constrained.getSnapshot().activitySlots.filter((slot) => !slot.taskId).length).toBeGreaterThan(0)
   })

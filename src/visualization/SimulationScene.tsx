@@ -1,7 +1,6 @@
 import {
   ACTIVE_TASK_MEMORY_MB,
   BASE_WORKER_MEMORY_MB,
-  IO_CAPACITY,
   POLL_REQUEST_VISUAL_THRESHOLD,
   type Poller,
   type SimulationSnapshot,
@@ -186,7 +185,7 @@ function ResourceBar({
           y={y}
           width={180 * segment.width}
           height="18"
-          className={`resource-fill ${segment.className}`}
+          className={`resource-fill ${segment.className}${throttled ? ' throttled' : ''}`}
         >
           <title>{segment.label}</title>
         </rect>
@@ -218,7 +217,7 @@ export function SimulationScene({
     task.state === 'acquired' || task.state === 'dispatching' || task.state === 'running',
   ).length * ACTIVE_TASK_MEMORY_MB
   const cacheMemoryMb = snapshot.workflowCache.reduce((sum, entry) => sum + entry.memoryMb, 0)
-  const memoryDescription = `Memory: ${compactNumber(baseMemoryMb)} MB base Workers + ${compactNumber(activeTaskMemoryMb)} MB active Tasks + ${compactNumber(cacheMemoryMb)} MB Workflow cache = ${compactNumber(snapshot.memoryUsedMb)} MB of ${memoryCapacityMb} MB`
+  const memoryDescription = `${snapshot.memoryPressure ? 'Memory pressure active. ' : ''}Memory: ${compactNumber(baseMemoryMb)} MB base Workers + ${compactNumber(activeTaskMemoryMb)} MB active Tasks + ${compactNumber(cacheMemoryMb)} MB Workflow cache = ${compactNumber(snapshot.memoryUsedMb)} MB of ${memoryCapacityMb} MB`
   const workflowQueueDepth = snapshot.workflowQueue.length
   const activityQueueDepth = snapshot.activityQueue.length
   const returnActive = [...timeline.tasks.values()].some((task) =>
@@ -275,10 +274,13 @@ export function SimulationScene({
       <Overflow count={activityQueueDepth} x={665} y={activityLaneY + 23} />
 
       <rect x="760" y="40" width="420" height="540" rx="8" className="region worker-region" />
-      <text x="780" y="73" className="region-title">WORKERS ({snapshot.workers.length})</text>
+      <text x="780" y="73" className="region-title">
+        {snapshot.workers.length === 1
+          ? `WORKER ${snapshot.workers[0].displayId}`
+          : `WORKERS (${snapshot.workers.length})`}
+      </text>
       {snapshot.workers.length === 1 && <>
         <rect x="775" y="84" width="390" height="482" rx="6" className="worker-card-outline" />
-        <text x="790" y="108" className="worker-card-heading">WORKER {snapshot.workers[0].displayId}</text>
       </>}
       <text x="785" y="190" className="section-label">Workflow Pollers</text>
       <Pollers pollers={snapshot.workflowPollers} y={workflowLaneY} />
@@ -306,6 +308,7 @@ export function SimulationScene({
         label="Memory"
         y={517}
         utilization={snapshot.memoryUtilization}
+        throttled={snapshot.memoryPressure}
         detail={`${compactNumber(snapshot.memoryUsedMb)} / ${memoryCapacityMb} MB`}
         fillClass="memory-fill"
         description={memoryDescription}
@@ -315,7 +318,7 @@ export function SimulationScene({
           { className: 'memory-cache-fill', label: `${compactNumber(cacheMemoryMb)} MB Workflow cache memory`, utilization: cacheMemoryMb / memoryCapacityMb },
         ]}
       />
-      <ResourceBar resource="io" label="I/O" y={543} utilization={snapshot.ioUtilization} throttled={snapshot.ioThrottled} detail={`${compactNumber(snapshot.ioDemand)} / ${IO_CAPACITY * snapshot.workers.length} throughput`} fillClass="io-fill" />
+      <ResourceBar resource="io" label="I/O" y={543} utilization={snapshot.ioUtilization} throttled={snapshot.ioThrottled} detail={`${compactNumber(snapshot.ioDemand)} / ${snapshot.config.ioCapacity * snapshot.workers.length} throughput`} fillClass="io-fill" />
 
       <circle cx="43" cy="496" r="5" className="workflow-execution" />
       <text x="54" y="500" className="small-label">Workflow</text>
@@ -330,11 +333,11 @@ export function SimulationScene({
       </text>
 
       <path d={`M 1160 ${returnLaneY} H 390`} className={`return-rail${returnActive ? ' active' : ''}`} markerEnd="url(#return-arrow)" />
-      <text x="615" y={returnLaneY - 11} className="return-rail-label">COMMANDS / RESULTS -&gt; TEMPORAL</text>
+      <text x="575" y={returnLaneY - 11} textAnchor="middle" className="return-rail-label">COMMANDS / RESULTS -&gt; TEMPORAL</text>
 
       <ResultLayer snapshot={snapshot} nowMs={nowMs} timeline={timeline} />
       <WorkflowLayer snapshot={snapshot} nowMs={nowMs} presentationNowMs={presentationNowMs} timeline={timeline} />
-      <TaskLayer snapshot={snapshot} />
+      <TaskLayer snapshot={snapshot} nowMs={nowMs} />
     </svg>
   )
 }
