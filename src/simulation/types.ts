@@ -1,7 +1,7 @@
 export type TaskType = 'workflow' | 'activity'
 export type WorkflowPhase = 'initial' | 'waiting' | 'decision' | 'final' | 'completed'
 export type TaskState = 'enqueuing' | 'queued' | 'acquired' | 'dispatching' | 'running' | 'returning' | 'completed'
-export type PollerState = 'long-polling' | 'task-received' | 'dispatching'
+export type PollerState = 'long-polling' | 'task-received'
 export type SlotState = 'available' | 'reserved' | 'occupied' | 'draining'
 export type TaskResourceProfile = 'cpu' | 'io'
 export type TaskExecutionPhase = 'replay' | 'decision' | 'activity'
@@ -256,13 +256,10 @@ export interface SimulationSnapshot {
   workflowCache: WorkflowCacheEntry[]
   cacheMetrics: CacheMetrics
   metrics: RollingMetrics
-  slotResidenceHistory: MetricSample[]
   taskThroughputHistory: TaskThroughputSample[]
   taskLatencyHistory: TaskTypeMetricSample[]
   taskDistribution: TaskDistribution
   roundTaskThroughput: RoundTaskThroughputSample | null
-  roundTaskThroughputHistory: RoundTaskThroughputSample[]
-  workflowCompletionHistory: MetricSample[]
   pollerBusyRatioHistory: TaskTypeMetricSample[]
   slotUtilizationHistory: TaskTypeMetricSample[]
   syncMatchRateHistory: TaskTypeMetricSample[]

@@ -225,7 +225,7 @@ export default function App() {
           <details className="monitoring-section" open>
             <summary>Temporal metrics</summary>
             <div className="monitoring-charts">
-              <TemporalMetricChart title="Poller busy ratio" subtitle="Share of configured Pollers receiving or dispatching Tasks" metricId="poller-busy-ratio" simulatedTime={snapshot.simulatedTime} samples={snapshot.pollerBusyRatioHistory} autoPauseTimes={autoPauseTimes} format="percent" />
+              <TemporalMetricChart title="Poller busy ratio" subtitle="Share of configured Pollers holding a received Task" metricId="poller-busy-ratio" simulatedTime={snapshot.simulatedTime} samples={snapshot.pollerBusyRatioHistory} autoPauseTimes={autoPauseTimes} format="percent" />
               <TemporalMetricChart title="Slot utilization" subtitle="Share of execution Slots reserved or occupied" metricId="slot-utilization" simulatedTime={snapshot.simulatedTime} samples={snapshot.slotUtilizationHistory} autoPauseTimes={autoPauseTimes} format="percent" />
               <TemporalMetricChart title="Sync match rate" subtitle="Rolling 5-second share of Tasks delivered immediately to waiting Pollers" metricId="sync-match-rate" simulatedTime={snapshot.simulatedTime} samples={snapshot.syncMatchRateHistory} autoPauseTimes={autoPauseTimes} format="percent" />
               <TemporalMetricChart title="Backlog" subtitle="Tasks waiting in Workflow and Activity Task Queues" metricId="backlog" simulatedTime={snapshot.simulatedTime} samples={snapshot.backlogHistory} autoPauseTimes={autoPauseTimes} format="count" />

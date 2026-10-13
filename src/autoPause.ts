@@ -35,9 +35,7 @@ export function advanceAutoPause(
     | 'cpuDemand'
     | 'ioDemand'
     | 'metrics'
-    | 'slotResidenceHistory'
     | 'taskThroughputHistory'
-    | 'workflowCompletionHistory'
   >,
 ): AutoPauseDecision {
   if (!state.armed) return { state, shouldPause: false }
@@ -63,11 +61,9 @@ export function advanceAutoPause(
     && snapshot.metrics.activityThroughput === 0
     && snapshot.metrics.workflowCompletions === 0
     && snapshot.metrics.slotResidenceSeconds === 0
-    && snapshot.slotResidenceHistory.at(-1)?.value === 0
     && snapshot.taskThroughputHistory.at(-1)?.total === 0
     && snapshot.taskThroughputHistory.at(-1)?.workflow === 0
     && snapshot.taskThroughputHistory.at(-1)?.activity === 0
-    && snapshot.workflowCompletionHistory.at(-1)?.value === 0
   if (!metricsAtZero) {
     return {
       state: armAutoPause(),

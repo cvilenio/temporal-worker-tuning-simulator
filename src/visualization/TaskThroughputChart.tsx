@@ -1,4 +1,4 @@
-import type { RoundTaskThroughputSample, TaskThroughputSample } from '../simulation'
+import type { TaskThroughputSample } from '../simulation'
 import { AutoPauseLegend, AutoPauseMarkers } from './ChartLifecycleMarkers'
 import { ThrottleBands, ThrottleLegend } from './ThrottleBands'
 
@@ -21,52 +21,31 @@ function linePath(samples: TaskThroughputSample[], series: SeriesKey, maxTime: n
   }).join(' ')
 }
 
-interface TaskThroughputPanelProps {
-  simulatedTime: number
-  currentTotal: number
-  currentElapsedSeconds?: number
-  samples: TaskThroughputSample[]
-  highlightSamples: TaskThroughputSample[]
-  autoPauseTimes: number[]
-  title: string
-  subtitle: string
-  titleId: string
-  ariaLabel: string
-  seriesGroups: TaskThroughputSample[][]
-  chartKind: string
-}
-
-function TaskThroughputPanel({
+export function TaskThroughputChart({
   simulatedTime,
   currentTotal,
-  currentElapsedSeconds,
   samples,
-  highlightSamples,
-  autoPauseTimes,
-  title,
-  subtitle,
-  titleId,
-  ariaLabel,
-  seriesGroups,
-  chartKind,
-}: TaskThroughputPanelProps) {
+  autoPauseTimes = [],
+}: {
+  simulatedTime: number
+  currentTotal: number
+  samples: TaskThroughputSample[]
+  autoPauseTimes?: number[]
+}) {
   const maxTime = Math.max(simulatedTime, 0.25)
   const observedMax = Math.max(0, ...samples.map((sample) => sample.total))
   const maxValue = Math.max(1, observedMax * 1.1)
   const midpoint = maxTime / 2
 
   return (
-    <section className="chart-panel" aria-labelledby={titleId}>
+    <section className="chart-panel" aria-labelledby="task-throughput-chart-title">
       <div className="chart-header">
         <div>
-          <h2 id={titleId}>{title}</h2>
-          <p>{subtitle}</p>
+          <h2 id="task-throughput-chart-title">Task throughput</h2>
+          <p>Rolling 5-second completion rate</p>
         </div>
         <div className="chart-status">
-          <strong>
-            {currentTotal.toFixed(2)} Tasks/s
-            {currentElapsedSeconds === undefined ? '' : ` over ${currentElapsedSeconds.toFixed(1)}s`}
-          </strong>
+          <strong>{currentTotal.toFixed(2)} Tasks/s</strong>
           <ThrottleLegend />
           <AutoPauseLegend />
         </div>
@@ -80,27 +59,25 @@ function TaskThroughputPanel({
         className="task-throughput-chart"
         viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
         role="img"
-        aria-label={`${ariaLabel} from 0 to ${simulatedTime.toFixed(1)} simulated seconds`}
-        data-chart-kind={chartKind}
+        aria-label={`Task throughput from 0 to ${simulatedTime.toFixed(1)} simulated seconds`}
         data-time-max={simulatedTime}
         data-sample-count={samples.length}
       >
-        <ThrottleBands samples={highlightSamples} maxTime={maxTime} left={LEFT} top={TOP} plotWidth={PLOT_WIDTH} plotHeight={PLOT_HEIGHT} />
+        <ThrottleBands samples={samples} maxTime={maxTime} left={LEFT} top={TOP} plotWidth={PLOT_WIDTH} plotHeight={PLOT_HEIGHT} />
         {[0, 0.5, 1].map((fraction) => {
           const y = TOP + PLOT_HEIGHT - fraction * PLOT_HEIGHT
           return <line key={fraction} x1={LEFT} y1={y} x2={WIDTH - RIGHT} y2={y} className="chart-grid-line" />
         })}
         <line x1={LEFT} y1={TOP} x2={LEFT} y2={TOP + PLOT_HEIGHT} className="chart-axis" />
         <line x1={LEFT} y1={TOP + PLOT_HEIGHT} x2={WIDTH - RIGHT} y2={TOP + PLOT_HEIGHT} className="chart-axis" />
-        {(['workflow', 'activity', 'total'] as const).flatMap((series) => seriesGroups.map((group, index) => (
+        {(['workflow', 'activity', 'total'] as const).map((series) => (
           <path
-            key={`${series}-${index}`}
-            d={linePath(group, series, maxTime, maxValue)}
+            key={series}
+            d={linePath(samples, series, maxTime, maxValue)}
             className={`chart-line throughput-${series}`}
             data-series={`${series}-task-throughput`}
-            data-segment={index + 1}
           />
-        )))}
+        ))}
         <AutoPauseMarkers timestamps={autoPauseTimes} maxTime={maxTime} left={LEFT} top={TOP} plotWidth={PLOT_WIDTH} plotHeight={PLOT_HEIGHT} />
         <text x={LEFT - 10} y={TOP + 4} textAnchor="end" className="chart-label">{maxValue.toFixed(2)}/s</text>
         <text x={LEFT - 10} y={TOP + PLOT_HEIGHT + 4} textAnchor="end" className="chart-label">0/s</text>
@@ -109,66 +86,5 @@ function TaskThroughputPanel({
         <text x={WIDTH - RIGHT} y={HEIGHT - 9} textAnchor="end" className="chart-label">{simulatedTime.toFixed(1)}s</text>
       </svg>
     </section>
-  )
-}
-
-export function TaskThroughputChart({
-  simulatedTime,
-  currentTotal,
-  samples,
-  autoPauseTimes = [],
-}: {
-  simulatedTime: number
-  currentTotal: number
-  samples: TaskThroughputSample[]
-  autoPauseTimes?: number[]
-}) {
-  return (
-    <TaskThroughputPanel
-      simulatedTime={simulatedTime}
-      currentTotal={currentTotal}
-      samples={samples}
-      highlightSamples={samples}
-      autoPauseTimes={autoPauseTimes}
-      title="Task throughput"
-      subtitle="Rolling 5-second completion rate"
-      titleId="task-throughput-chart-title"
-      ariaLabel="Task throughput"
-      seriesGroups={[samples]}
-      chartKind="rolling"
-    />
-  )
-}
-
-export function RoundTaskThroughputChart({
-  simulatedTime,
-  current,
-  samples,
-  highlightSamples,
-  autoPauseTimes = [],
-}: {
-  simulatedTime: number
-  current: RoundTaskThroughputSample | null
-  samples: RoundTaskThroughputSample[]
-  highlightSamples: TaskThroughputSample[]
-  autoPauseTimes?: number[]
-}) {
-  const roundIds = [...new Set(samples.map((sample) => sample.roundId))]
-  const groups = roundIds.map((roundId) => samples.filter((sample) => sample.roundId === roundId))
-  return (
-    <TaskThroughputPanel
-      simulatedTime={simulatedTime}
-      currentTotal={current?.total ?? 0}
-      currentElapsedSeconds={current?.elapsedSeconds ?? 0}
-      samples={samples}
-      highlightSamples={highlightSamples}
-      autoPauseTimes={autoPauseTimes}
-      title="Task throughput since start"
-      subtitle="Completed Tasks divided by elapsed simulated time in each run"
-      titleId="round-task-throughput-chart-title"
-      ariaLabel="Task throughput since start"
-      seriesGroups={groups}
-      chartKind="since-start"
-    />
   )
 }

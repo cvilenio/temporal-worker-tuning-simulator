@@ -3,6 +3,7 @@ import {
   BASE_WORKER_MEMORY_MB,
   CACHED_WORKFLOW_MEMORY_MB,
   CPU_CONTENTION_KNEE,
+  COMPLETED_WORKFLOW_RETENTION_SECONDS,
   MAX_CPU_CAPACITY,
   MIN_CPU_CAPACITY,
   CPU_MAX_CONTENTION_SPEED_LOSS,
@@ -22,7 +23,9 @@ import {
   IO_CONTENTION_KNEE,
   IO_MAX_CONTENTION_SPEED_LOSS,
   MAX_IO_CAPACITY,
+  MAX_METRIC_HISTORY_SAMPLES,
   MAX_RECENT_EVENTS,
+  MAX_RETAINED_EVENTS,
   MEMORY_PRESSURE_PULSE_SECONDS,
   METRIC_SAMPLE_SECONDS,
   METRIC_WINDOW_SECONDS,
@@ -91,6 +94,55 @@ export const defaultConfig: SimulationConfig = {
   workflowTaskReplayLatencySeconds: DEFAULT_WORKFLOW_TASK_REPLAY_LATENCY_SECONDS,
 }
 
+// Latencies are differences of tick-aligned times, so a count per exact
+// latency value gives exact percentiles in memory bounded by the number of
+// distinct latencies rather than the number of completed Tasks.
+interface TaskLatencyHistogram {
+  counts: Map<number, number>
+  completed: number
+  totalSeconds: number
+}
+
+function emptyLatencyHistogram(): TaskLatencyHistogram {
+  return { counts: new Map(), completed: 0, totalSeconds: 0 }
+}
+
+function recordLatency(histogram: TaskLatencyHistogram, seconds: number): void {
+  histogram.counts.set(seconds, (histogram.counts.get(seconds) ?? 0) + 1)
+  histogram.completed += 1
+  histogram.totalSeconds += seconds
+}
+
+function mergeLatencyHistograms(left: TaskLatencyHistogram, right: TaskLatencyHistogram): TaskLatencyHistogram {
+  const counts = new Map(left.counts)
+  for (const [seconds, count] of right.counts) counts.set(seconds, (counts.get(seconds) ?? 0) + count)
+  return {
+    counts,
+    completed: left.completed + right.completed,
+    totalSeconds: left.totalSeconds + right.totalSeconds,
+  }
+}
+
+// Keeps the first sample and every second one after it, folding each dropped
+// sample's flags into the sample that replaces it.
+function compactSamples<T extends { throttled: boolean; replaying: boolean }>(samples: T[]): T[] {
+  const compacted = samples.slice(0, 1)
+  for (let index = 1; index < samples.length; index += 2) {
+    const dropped = samples[index]
+    const kept = samples[index + 1]
+    if (!kept) {
+      compacted.push(dropped)
+      break
+    }
+    compacted.push({
+      ...kept,
+      throttled: kept.throttled || dropped.throttled,
+      replaying: kept.replaying || dropped.replaying,
+    })
+  }
+  return compacted
+}
+
 function normalizeConfig(config: SimulationConfig): SimulationConfig {
   const cpuDemand = (value: number) => Math.max(0.01, Math.min(1, Math.round(value * 100) / 100))
   const taskDuration = (value: number) => Math.max(0.05, Math.min(10, Math.round(value * 20) / 20))
@@ -152,7 +204,7 @@ interface TaskLatencyRecord extends TaskCompletionRecord {
 interface LoadTestRound {
   startedAt: number
   endedAt: number | null
-  latencyBaseline: number
+  latencies: Record<TaskType, TaskLatencyHistogram>
 }
 
 interface TaskDeliveryRecord {
@@ -214,7 +266,6 @@ export class Simulation {
   private events: SemanticEvent[] = []
   private completions: CompletionRecord[] = []
   private slotResidences: SlotResidenceRecord[] = []
-  private slotResidenceHistory: MetricSample[] = [{ timestamp: 0, value: 0, throttled: false, replaying: false }]
   private taskCompletions: TaskCompletionRecord[] = []
   private taskLatencies: TaskLatencyRecord[] = []
   private taskThroughputHistory: TaskThroughputSample[] = [{
@@ -230,8 +281,7 @@ export class Simulation {
   private nextTaskThroughputRoundId = 1
   private taskThroughputRound: TaskThroughputRound | null = null
   private loadTestRound: LoadTestRound | null = null
-  private roundTaskThroughputHistory: RoundTaskThroughputSample[] = []
-  private workflowCompletionHistory: MetricSample[] = [{ timestamp: 0, value: 0, throttled: false, replaying: false }]
+  private lastRoundTaskThroughput: RoundTaskThroughputSample | null = null
   private taskDeliveries: TaskDeliveryRecord[] = []
   private pollerBusyRatioHistory: TaskTypeMetricSample[] = [this.emptyTaskTypeMetricSample()]
   private slotUtilizationHistory: TaskTypeMetricSample[] = [this.emptyTaskTypeMetricSample()]
@@ -249,6 +299,11 @@ export class Simulation {
   private ioThrottled = false
   private throttledSinceLastMetricSample = false
   private replayingSinceLastMetricSample = false
+  private cpuThrottledSinceLastMetricSample = false
+  private memoryPressureSinceLastMetricSample = false
+  private ioThrottledSinceLastMetricSample = false
+  private metricSampleStride = 1
+  private scheduleToStartTotals = { workflow: { seconds: 0, count: 0 }, activity: { seconds: 0, count: 0 } }
 
   constructor(config: Partial<SimulationConfig> = {}, seed = 1) {
     this.config = normalizeConfig({ ...defaultConfig, ...config })
@@ -313,17 +368,13 @@ export class Simulation {
     this.loadTestRound = {
       startedAt: this.time,
       endedAt: null,
-      latencyBaseline: this.taskLatencies.length,
+      latencies: { workflow: emptyLatencyHistogram(), activity: emptyLatencyHistogram() },
     }
-    this.recordRoundTaskThroughputSample(false, false)
   }
 
   endTaskThroughputRound(): void {
     if (!this.taskThroughputRound) return
-    this.recordRoundTaskThroughputSample(
-      this.throttledSinceLastMetricSample,
-      this.replayingSinceLastMetricSample,
-    )
+    this.lastRoundTaskThroughput = this.currentRoundTaskThroughput()
     if (this.loadTestRound) this.loadTestRound.endedAt = this.time
     this.taskThroughputRound = null
   }
@@ -343,7 +394,6 @@ export class Simulation {
     this.events = []
     this.completions = []
     this.slotResidences = []
-    this.slotResidenceHistory = [{ timestamp: 0, value: 0, throttled: false, replaying: false }]
     this.taskCompletions = []
     this.taskLatencies = []
     this.taskThroughputHistory = [{ timestamp: 0, total: 0, workflow: 0, activity: 0, throttled: false, replaying: false }]
@@ -352,8 +402,7 @@ export class Simulation {
     this.nextTaskThroughputRoundId = 1
     this.taskThroughputRound = null
     this.loadTestRound = null
-    this.roundTaskThroughputHistory = []
-    this.workflowCompletionHistory = [{ timestamp: 0, value: 0, throttled: false, replaying: false }]
+    this.lastRoundTaskThroughput = null
     this.taskDeliveries = []
     this.pollerBusyRatioHistory = [this.emptyTaskTypeMetricSample()]
     this.slotUtilizationHistory = [this.emptyTaskTypeMetricSample()]
@@ -371,6 +420,11 @@ export class Simulation {
     this.ioThrottled = false
     this.throttledSinceLastMetricSample = false
     this.replayingSinceLastMetricSample = false
+    this.cpuThrottledSinceLastMetricSample = false
+    this.memoryPressureSinceLastMetricSample = false
+    this.ioThrottledSinceLastMetricSample = false
+    this.metricSampleStride = 1
+    this.scheduleToStartTotals = { workflow: { seconds: 0, count: 0 }, activity: { seconds: 0, count: 0 } }
     this.config = config
     this.workflowPollers = []
     this.activityPollers = []
@@ -391,13 +445,9 @@ export class Simulation {
   }
 
   getSnapshot(): SimulationSnapshot {
-    const activeTasks = [...this.tasks.values()].filter((task) => task.state !== 'completed')
     const scheduleToStart = (type: TaskType) => {
-      const started = [...this.tasks.values()].filter(
-        (task) => task.type === type && task.startedAt !== undefined,
-      )
-      if (started.length === 0) return 0
-      return started.reduce((sum, task) => sum + task.startedAt! - task.scheduledAt, 0) / started.length
+      const totals = this.scheduleToStartTotals[type]
+      return totals.count === 0 ? 0 : totals.seconds / totals.count
     }
     const cutoff = this.time - METRIC_WINDOW_SECONDS
     const recent = this.completions.filter((record) => record.timestamp > cutoff)
@@ -410,7 +460,7 @@ export class Simulation {
       simulatedTime: this.time,
       config: { ...this.config },
       workflows: [...this.workflows.values()].map((workflow) => ({ ...workflow })),
-      tasks: activeTasks.map((task) => ({ ...task })),
+      tasks: [...this.tasks.values()].map((task) => ({ ...task })),
       workflowQueue: [...this.workflowQueue],
       activityQueue: [...this.activityQueue],
       workers,
@@ -448,13 +498,10 @@ export class Simulation {
         workflowScheduleToStart: scheduleToStart('workflow'),
         activityScheduleToStart: scheduleToStart('activity'),
       },
-      slotResidenceHistory: this.slotResidenceHistory.map((sample) => ({ ...sample })),
       taskThroughputHistory: this.taskThroughputHistory.map((sample) => ({ ...sample })),
       taskLatencyHistory: this.taskLatencyHistory.map((sample) => ({ ...sample })),
       taskDistribution: this.currentTaskDistribution(),
       roundTaskThroughput: this.currentRoundTaskThroughput(),
-      roundTaskThroughputHistory: this.roundTaskThroughputHistory.map((sample) => ({ ...sample })),
-      workflowCompletionHistory: this.workflowCompletionHistory.map((sample) => ({ ...sample })),
       pollerBusyRatioHistory: this.pollerBusyRatioHistory.map((sample) => ({ ...sample })),
       slotUtilizationHistory: this.slotUtilizationHistory.map((sample) => ({ ...sample })),
       syncMatchRateHistory: this.syncMatchRateHistory.map((sample) => ({ ...sample })),
@@ -486,8 +533,10 @@ export class Simulation {
     this.allocateResources()
     this.enforceCacheLimits()
     this.throttledSinceLastMetricSample ||= this.time < this.memoryPressureUntil
+    this.memoryPressureSinceLastMetricSample ||= this.time < this.memoryPressureUntil
     this.removeDrainedSlots()
     this.removeDrainedWorkers()
+    this.removeRetiredWorkflows()
     this.completions = this.completions.filter(
       (record) => record.timestamp > this.time - METRIC_WINDOW_SECONDS,
     )
@@ -500,17 +549,14 @@ export class Simulation {
     this.taskDeliveries = this.taskDeliveries.filter(
       (record) => record.timestamp > this.time - METRIC_WINDOW_SECONDS,
     )
+    this.taskLatencies = this.taskLatencies.filter(
+      (record) => record.timestamp > this.time - METRIC_WINDOW_SECONDS,
+    )
     const tickNumber = Math.round(this.time / TICK_SECONDS)
-    const sampleEveryTicks = Math.round(METRIC_SAMPLE_SECONDS / TICK_SECONDS)
+    const sampleEveryTicks = Math.round(METRIC_SAMPLE_SECONDS / TICK_SECONDS) * this.metricSampleStride
     if (tickNumber % sampleEveryTicks === 0) {
       const throttled = this.throttledSinceLastMetricSample
       const replaying = this.replayingSinceLastMetricSample
-      this.slotResidenceHistory.push({
-        timestamp: this.time,
-        value: this.currentSlotResidenceSeconds(),
-        throttled,
-        replaying,
-      })
       this.taskThroughputHistory.push({
         timestamp: this.time,
         ...this.currentTaskThroughput(),
@@ -518,13 +564,6 @@ export class Simulation {
         replaying,
       })
       this.taskLatencyHistory.push(this.metricSample(this.currentTaskLatency(), throttled, replaying))
-      this.recordRoundTaskThroughputSample(throttled, replaying)
-      this.workflowCompletionHistory.push({
-        timestamp: this.time,
-        value: this.currentWorkflowCompletionRate(),
-        throttled,
-        replaying,
-      })
       this.pollerBusyRatioHistory.push(this.metricSample(this.currentPollerBusyRatio(), throttled, replaying))
       this.slotUtilizationHistory.push(this.metricSample(this.currentSlotUtilization(), throttled, replaying))
       this.syncMatchRateHistory.push(this.metricSample(this.currentSyncMatchRate(), throttled, replaying))
@@ -532,23 +571,50 @@ export class Simulation {
       this.cpuUtilizationHistory.push({
         timestamp: this.time,
         value: this.cpuUtilization,
-        throttled: this.cpuThrottled,
+        throttled: this.cpuThrottledSinceLastMetricSample,
         replaying: false,
       })
       this.memoryUtilizationHistory.push({
         timestamp: this.time,
         value: this.currentMemoryUtilization(),
-        throttled: this.time < this.memoryPressureUntil,
+        throttled: this.memoryPressureSinceLastMetricSample,
         replaying: false,
       })
       this.ioUtilizationHistory.push({
         timestamp: this.time,
         value: this.ioUtilization,
-        throttled: this.ioThrottled,
+        throttled: this.ioThrottledSinceLastMetricSample,
         replaying: false,
       })
       this.throttledSinceLastMetricSample = false
       this.replayingSinceLastMetricSample = false
+      this.cpuThrottledSinceLastMetricSample = false
+      this.memoryPressureSinceLastMetricSample = false
+      this.ioThrottledSinceLastMetricSample = false
+      if (this.taskThroughputHistory.length > MAX_METRIC_HISTORY_SAMPLES) this.compactMetricHistories()
+    }
+  }
+
+  // Charts span the whole run, so long runs halve their sample density
+  // instead of growing without bound. Merged samples keep throttle and
+  // replay flags so chart bands survive compaction.
+  private compactMetricHistories(): void {
+    this.metricSampleStride *= 2
+    this.taskThroughputHistory = compactSamples(this.taskThroughputHistory)
+    this.taskLatencyHistory = compactSamples(this.taskLatencyHistory)
+    this.pollerBusyRatioHistory = compactSamples(this.pollerBusyRatioHistory)
+    this.slotUtilizationHistory = compactSamples(this.slotUtilizationHistory)
+    this.syncMatchRateHistory = compactSamples(this.syncMatchRateHistory)
+    this.backlogHistory = compactSamples(this.backlogHistory)
+    this.cpuUtilizationHistory = compactSamples(this.cpuUtilizationHistory)
+    this.memoryUtilizationHistory = compactSamples(this.memoryUtilizationHistory)
+    this.ioUtilizationHistory = compactSamples(this.ioUtilizationHistory)
+  }
+
+  private removeRetiredWorkflows(): void {
+    const cutoff = this.time - COMPLETED_WORKFLOW_RETENTION_SECONDS
+    for (const workflow of this.workflows.values()) {
+      if (workflow.state === 'completed' && workflow.completedAt! <= cutoff) this.workflows.delete(workflow.id)
     }
   }
 
@@ -577,36 +643,40 @@ export class Simulation {
 
   private currentTaskDistribution(): TaskDistribution {
     const round = this.loadTestRound
-    const empty = () => this.taskDistributionStats([], 0)
+    const empty = () => this.taskDistributionStats(emptyLatencyHistogram(), 0)
     if (!round) return { total: empty(), workflow: empty(), activity: empty() }
     const endedAt = round.endedAt ?? this.time
     const elapsed = Math.max(endedAt - round.startedAt, 0)
-    const records = this.taskLatencies
-      .slice(round.latencyBaseline)
-      .filter((record) => record.timestamp <= endedAt)
+    const { workflow, activity } = round.latencies
     return {
-      total: this.taskDistributionStats(records, elapsed),
-      workflow: this.taskDistributionStats(records.filter((record) => record.type === 'workflow'), elapsed),
-      activity: this.taskDistributionStats(records.filter((record) => record.type === 'activity'), elapsed),
+      total: this.taskDistributionStats(mergeLatencyHistograms(workflow, activity), elapsed),
+      workflow: this.taskDistributionStats(workflow, elapsed),
+      activity: this.taskDistributionStats(activity, elapsed),
     }
   }
 
-  private taskDistributionStats(records: TaskLatencyRecord[], elapsed: number): TaskDistributionStats {
-    const values = records.map((record) => record.seconds).sort((left, right) => left - right)
+  private taskDistributionStats(histogram: TaskLatencyHistogram, elapsed: number): TaskDistributionStats {
+    const latencies = [...histogram.counts.keys()].sort((left, right) => left - right)
+    const completed = histogram.completed
     const percentile = (fraction: number) => {
-      if (values.length === 0) return 0
-      return values[Math.max(0, Math.ceil(values.length * fraction) - 1)]
+      const rank = Math.max(1, Math.ceil(completed * fraction))
+      let seen = 0
+      for (const latency of latencies) {
+        seen += histogram.counts.get(latency)!
+        if (seen >= rank) return latency
+      }
+      return 0
     }
     return {
-      completed: values.length,
-      throughput: elapsed === 0 ? 0 : values.length / elapsed,
-      averageLatency: values.length === 0 ? 0 : values.reduce((sum, value) => sum + value, 0) / values.length,
+      completed,
+      throughput: elapsed === 0 ? 0 : completed / elapsed,
+      averageLatency: completed === 0 ? 0 : histogram.totalSeconds / completed,
       p25Latency: percentile(0.25),
       p50Latency: percentile(0.5),
       p75Latency: percentile(0.75),
       p95Latency: percentile(0.95),
       p99Latency: percentile(0.99),
-      maxLatency: values.at(-1) ?? 0,
+      maxLatency: latencies.at(-1) ?? 0,
     }
   }
 
@@ -669,7 +739,7 @@ export class Simulation {
 
   private currentRoundTaskThroughput(): RoundTaskThroughputSample | null {
     const round = this.taskThroughputRound
-    if (!round) return this.roundTaskThroughputHistory.at(-1) ?? null
+    if (!round) return this.lastRoundTaskThroughput
     const elapsedSeconds = this.round(this.time - round.startedAt)
     const workflowCompleted = this.taskCompletionTotals.workflow - round.workflowBaseline
     const activityCompleted = this.taskCompletionTotals.activity - round.activityBaseline
@@ -685,23 +755,6 @@ export class Simulation {
       throttled: false,
       replaying: false,
     }
-  }
-
-  private recordRoundTaskThroughputSample(throttled: boolean, replaying: boolean): void {
-    const sample = this.currentRoundTaskThroughput()
-    if (!sample || !this.taskThroughputRound) return
-    sample.throttled = throttled
-    sample.replaying = replaying
-    const last = this.roundTaskThroughputHistory.at(-1)
-    if (last?.roundId === sample.roundId && last.timestamp === sample.timestamp) {
-      this.roundTaskThroughputHistory[this.roundTaskThroughputHistory.length - 1] = sample
-    } else {
-      this.roundTaskThroughputHistory.push(sample)
-    }
-  }
-
-  private currentWorkflowCompletionRate(): number {
-    return this.completions.filter((record) => record.type === 'workflow').length / METRIC_WINDOW_SECONDS
   }
 
   private trimRetiredPollers(): void {
@@ -866,6 +919,8 @@ export class Simulation {
       if (task.slotDispatchRemaining > 0) continue
       task.state = 'running'
       task.startedAt = this.time
+      this.scheduleToStartTotals[task.type].seconds += this.time - task.scheduledAt
+      this.scheduleToStartTotals[task.type].count += 1
       const slot = this.getSlots(task.type).find((candidate) => candidate.id === task.assignedSlotId)
       if (slot && slot.state !== 'draining') slot.state = 'occupied'
       this.emit(task.type === 'workflow' ? 'WORKFLOW_TASK_STARTED' : 'ACTIVITY_TASK_STARTED', {
@@ -964,7 +1019,6 @@ export class Simulation {
       task.routingState = 'shared-fallback'
       task.stickyFallbackAt = this.time
       task.preferredWorkerId = undefined
-      this.invalidateWorkflowCache(task.workflowId, 'STICKY_FALLBACK')
       this.emit('STICKY_FALLBACK', {
         workflowId: task.workflowId,
         taskId: task.id,
@@ -1042,6 +1096,8 @@ export class Simulation {
     this.ioUtilization = Math.min(this.ioDemand / (this.config.ioCapacity * workerCount), 1)
     this.ioThrottled = [...this.workers.values()].some((worker) => worker.ioThrottled)
     this.throttledSinceLastMetricSample ||= this.cpuThrottled || this.ioThrottled
+    this.cpuThrottledSinceLastMetricSample ||= this.cpuThrottled
+    this.ioThrottledSinceLastMetricSample ||= this.ioThrottled
 
     for (const task of running) {
       if (task.replayCpuWorkRemaining <= 0 && task.cpuWorkRemaining <= 0 && task.ioWorkRemaining <= 0) {
@@ -1090,12 +1146,13 @@ export class Simulation {
   private completeTask(task: SimulationTask): void {
     task.state = 'completed'
     task.completedAt = this.time
+    this.tasks.delete(task.id)
+    const latencySeconds = this.round(this.time - task.scheduledAt)
     this.taskCompletions.push({ timestamp: this.time, type: task.type })
-    this.taskLatencies.push({
-      timestamp: this.time,
-      type: task.type,
-      seconds: this.round(this.time - task.scheduledAt),
-    })
+    this.taskLatencies.push({ timestamp: this.time, type: task.type, seconds: latencySeconds })
+    if (this.loadTestRound && this.loadTestRound.endedAt === null) {
+      recordLatency(this.loadTestRound.latencies[task.type], latencySeconds)
+    }
     this.taskCompletionTotals[task.type] += 1
     const workflow = this.workflows.get(task.workflowId)!
     if (task.type === 'workflow') {
@@ -1187,9 +1244,13 @@ export class Simulation {
       this.removeCachedWorkflow(workflow.id)
       return
     }
-    for (const entry of this.workflowCache.values()) {
+    // After a sticky fallback moves the Workflow to another Worker, the
+    // previous Worker's cached state is stale.
+    for (const entry of [...this.workflowCache.values()]) {
       if (entry.workflowId === workflow.id && entry.workerId !== workerId) {
         this.workflowCache.delete(this.cacheKey(entry.workerId, entry.workflowId))
+        this.cacheEvictions += 1
+        this.emit('CACHE_EVICTED', { workflowId: workflow.id, workerId: entry.workerId, reason: 'STICKY_FALLBACK' })
       }
     }
     const key = this.cacheKey(workerId, workflow.id)
@@ -1269,6 +1330,8 @@ export class Simulation {
     return true
   }
 
+  // Removing a completed Workflow is a normal close rather than a forced
+  // eviction, so it emits an event without counting toward cacheEvictions.
   private removeCachedWorkflow(workflowId: string, reason?: 'WORKFLOW_COMPLETED'): void {
     for (const entry of [...this.workflowCache.values()]) {
       if (entry.workflowId === workflowId) {
@@ -1285,7 +1348,7 @@ export class Simulation {
     }
   }
 
-  private invalidateWorkflowCache(workflowId: string, reason: 'WORKER_REMOVED' | 'STICKY_FALLBACK'): void {
+  private invalidateWorkflowCache(workflowId: string, reason: 'WORKER_REMOVED'): void {
     for (const entry of [...this.workflowCache.values()]) {
       if (entry.workflowId !== workflowId) continue
       this.workflowCache.delete(this.cacheKey(entry.workerId, entry.workflowId))
@@ -1623,6 +1686,7 @@ export class Simulation {
 
   private emit(type: string, data: Omit<SemanticEvent, 'id' | 'timestamp' | 'type'>): void {
     this.events.push({ id: this.nextEventId++, timestamp: this.time, type, ...data })
+    if (this.events.length > MAX_RETAINED_EVENTS * 2) this.events = this.events.slice(-MAX_RETAINED_EVENTS)
   }
 
   private round(value: number): number {

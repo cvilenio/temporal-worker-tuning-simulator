@@ -150,7 +150,7 @@ describe('shared CPU', () => {
     expect(snapshot.cpuUtilization).toBe(0.85)
     expect(snapshot.cpuThrottled).toBe(true)
     runFor(simulation, 0.3)
-    expect(simulation.getSnapshot().slotResidenceHistory.some((sample) => sample.throttled)).toBe(true)
+    expect(simulation.getSnapshot().cpuUtilizationHistory.some((sample) => sample.throttled)).toBe(true)
   })
 
   it('applies CPU demand changes only to newly created Tasks', () => {

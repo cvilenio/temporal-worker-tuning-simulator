@@ -14,13 +14,12 @@ describe('metric history', () => {
     runFor(simulation, 12)
     const snapshot = simulation.getSnapshot()
 
-    expect(snapshot.slotResidenceHistory.some((sample) => sample.replaying)).toBe(true)
     expect(snapshot.taskThroughputHistory.some((sample) => sample.replaying)).toBe(true)
-    expect(snapshot.workflowCompletionHistory.some((sample) => sample.replaying)).toBe(true)
-    expect(snapshot.slotResidenceHistory.some((sample) => sample.replaying && sample.throttled)).toBe(true)
+    expect(snapshot.slotUtilizationHistory.some((sample) => sample.replaying)).toBe(true)
+    expect(snapshot.taskThroughputHistory.some((sample) => sample.replaying && sample.throttled)).toBe(true)
   })
 
-  it('retains Slot residence samples for full simulation time and clears on reset', () => {
+  it('retains metric samples for full simulation time and clears on reset', () => {
     const simulation = new Simulation({
       workflowStartRate: 0,
       cpuCapacity: 8,
@@ -29,10 +28,8 @@ describe('metric history', () => {
     })
     simulation.startWorkflow()
     runFor(simulation, 12)
-    const history = simulation.getSnapshot().slotResidenceHistory
     const throughputHistory = simulation.getSnapshot().taskThroughputHistory
     const latencyHistory = simulation.getSnapshot().taskLatencyHistory
-    const workflowCompletionHistory = simulation.getSnapshot().workflowCompletionHistory
     const pollerBusyRatioHistory = simulation.getSnapshot().pollerBusyRatioHistory
     const slotUtilizationHistory = simulation.getSnapshot().slotUtilizationHistory
     const syncMatchRateHistory = simulation.getSnapshot().syncMatchRateHistory
@@ -41,11 +38,8 @@ describe('metric history', () => {
     const memoryUtilizationHistory = simulation.getSnapshot().memoryUtilizationHistory
     const ioUtilizationHistory = simulation.getSnapshot().ioUtilizationHistory
 
-    expect(history).toHaveLength(49)
-    expect(history[0]).toEqual({ timestamp: 0, value: 0, throttled: false, replaying: false })
-    expect(history.at(-1)?.timestamp).toBe(12)
-    expect(history.some((sample) => sample.value > 0)).toBe(true)
     expect(throughputHistory).toHaveLength(49)
+    expect(throughputHistory.at(-1)?.timestamp).toBe(12)
     expect(throughputHistory.every((sample) =>
       sample.total === sample.workflow + sample.activity)).toBe(true)
     expect(throughputHistory.some((sample) => sample.workflow > 0)).toBe(true)
@@ -54,9 +48,6 @@ describe('metric history', () => {
     expect(latencyHistory.some((sample) => sample.total > 0)).toBe(true)
     expect(latencyHistory.some((sample) => sample.workflow > 0)).toBe(true)
     expect(latencyHistory.some((sample) => sample.activity > 0)).toBe(true)
-    expect(workflowCompletionHistory).toHaveLength(49)
-    expect(workflowCompletionHistory.at(-1)?.timestamp).toBe(12)
-    expect(workflowCompletionHistory.some((sample) => sample.value > 0)).toBe(true)
     expect(pollerBusyRatioHistory).toHaveLength(49)
     expect(pollerBusyRatioHistory.some((sample) => sample.total > 0)).toBe(true)
     expect(slotUtilizationHistory).toHaveLength(49)
@@ -73,7 +64,6 @@ describe('metric history', () => {
       .every((sample) => sample.value >= 0 && sample.value <= 1)).toBe(true)
 
     simulation.reset()
-    expect(simulation.getSnapshot().slotResidenceHistory).toEqual([{ timestamp: 0, value: 0, throttled: false, replaying: false }])
     expect(simulation.getSnapshot().taskThroughputHistory).toEqual([{
       timestamp: 0,
       total: 0,
@@ -90,7 +80,6 @@ describe('metric history', () => {
       throttled: false,
       replaying: false,
     }])
-    expect(simulation.getSnapshot().workflowCompletionHistory).toEqual([{ timestamp: 0, value: 0, throttled: false, replaying: false }])
     const emptyTaskTypeHistory = [{ timestamp: 0, total: 0, workflow: 0, activity: 0, throttled: false, replaying: false }]
     expect(simulation.getSnapshot().pollerBusyRatioHistory).toEqual(emptyTaskTypeHistory)
     expect(simulation.getSnapshot().slotUtilizationHistory).toEqual(emptyTaskTypeHistory)
@@ -208,11 +197,9 @@ describe('metric history', () => {
       activity: 0,
     })
     expect(secondRun.taskDistribution.total.completed).toBe(0)
-    expect(new Set(secondRun.roundTaskThroughputHistory.map((sample) => sample.roundId))).toEqual(new Set([1, 2]))
 
     simulation.reset()
     expect(simulation.getSnapshot().roundTaskThroughput).toBeNull()
-    expect(simulation.getSnapshot().roundTaskThroughputHistory).toEqual([])
     expect(simulation.getSnapshot().taskDistribution.total.completed).toBe(0)
   })
 })

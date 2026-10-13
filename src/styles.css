@@ -104,7 +104,7 @@ h1 { margin: 0; font-size: 1.35rem; font-weight: 650; }
 .flow-line { stroke: var(--color-border-strong); stroke-width: 1.5; }
 .arrow-head { fill: var(--color-border-strong); }
 .poller { fill: var(--color-surface); stroke: var(--color-text-secondary); stroke-width: 2; }
-.poller.task-received, .poller.dispatching { fill: var(--color-border-strong); stroke: var(--color-text); }
+.poller.task-received { fill: var(--color-border-strong); stroke: var(--color-text); }
 .poll-request { stroke: var(--color-border-strong); stroke-width: 1; stroke-dasharray: 2 4; opacity: 0.35; animation: poll-request-pulse 1.4s ease-in-out infinite; }
 @keyframes poll-request-pulse {
   0%, 100% { opacity: 0.18; }
@@ -182,7 +182,7 @@ h1 { margin: 0; font-size: 1.35rem; font-weight: 650; }
 .chart-throttle-key i { width: 14px; height: 8px; }
 .chart-throttle-key i { border: 1px solid color-mix(in srgb, var(--color-danger) 75%, transparent); background: color-mix(in srgb, var(--color-danger) 24%, transparent); }
 .chart-auto-pause-key i { width: 8px; height: 11px; border-left: 1px dashed var(--color-pause); }
-.slot-residence-chart, .task-throughput-chart, .workflow-completion-chart { display: block; width: 100%; margin-top: 0.35rem; }
+.task-throughput-chart { display: block; width: 100%; margin-top: 0.35rem; }
 .chart-legend { display: flex; flex-wrap: wrap; gap: 1rem; margin-top: 0.45rem; color: var(--color-text-muted); font-size: 0.72rem; }
 .chart-legend span { display: inline-flex; align-items: center; gap: 0.35rem; }
 .legend-swatch { display: inline-block; width: 18px; height: 2px; }
@@ -194,7 +194,6 @@ h1 { margin: 0; font-size: 1.35rem; font-weight: 650; }
 .chart-line.throughput-total { stroke: var(--color-text); stroke-width: 2.25; }
 .chart-line.throughput-workflow { stroke: var(--color-workflow); }
 .chart-line.throughput-activity { stroke: var(--color-activity); }
-.chart-line.workflow-completion-line { stroke: var(--color-success); }
 .chart-line.resource-cpu { stroke: var(--color-cpu); }
 .chart-line.resource-memory { stroke: var(--color-magenta); }
 .chart-line.resource-io { stroke: var(--color-io); }

@@ -64,7 +64,6 @@ describe('TaskLayer', () => {
         workflowScheduleToStart: 0,
         activityScheduleToStart: 0,
       },
-      slotResidenceHistory: [{ timestamp: 0, value: 0, throttled: false, replaying: false }],
       taskThroughputHistory: [{ timestamp: 0, total: 0, workflow: 0, activity: 0, throttled: false, replaying: false }],
       taskLatencyHistory: [{ timestamp: 0, total: 0, workflow: 0, activity: 0, throttled: false, replaying: false }],
       taskDistribution: {
@@ -73,8 +72,6 @@ describe('TaskLayer', () => {
         activity: { completed: 0, throughput: 0, averageLatency: 0, p25Latency: 0, p50Latency: 0, p75Latency: 0, p95Latency: 0, p99Latency: 0, maxLatency: 0 },
       },
       roundTaskThroughput: null,
-      roundTaskThroughputHistory: [],
-      workflowCompletionHistory: [{ timestamp: 0, value: 0, throttled: false, replaying: false }],
       pollerBusyRatioHistory: [{ timestamp: 0, total: 0, workflow: 0, activity: 0, throttled: false, replaying: false }],
       slotUtilizationHistory: [{ timestamp: 0, total: 0, workflow: 0, activity: 0, throttled: false, replaying: false }],
       syncMatchRateHistory: [{ timestamp: 0, total: 0, workflow: 0, activity: 0, throttled: false, replaying: false }],

@@ -105,7 +105,7 @@ describe('multi-Worker sticky Workflow routing', () => {
 
     expect(fallbackEvent.routingState).toBe('shared-fallback')
     expect(fallbackTask?.routingState === 'shared-fallback' || fallbackTask === undefined).toBe(true)
-    expect(fallback.workflows.find((workflow) => workflow.id === 'workflow-1')?.cachedWorkerId).toBeNull()
+    expect(fallback.workflows.find((workflow) => workflow.id === 'workflow-1')?.cachedWorkerId).toBe('worker-1')
 
     simulation.updateConfig({ workflowSlots: 1 })
     const transferred = runUntil(simulation, (candidate) => candidate.workflows.find((workflow) =>
@@ -115,6 +115,41 @@ describe('multi-Worker sticky Workflow routing', () => {
     expect(events.some((event) => event.type === 'CACHE_MISS' && event.taskId === stickyTask.id && event.workerId === 'worker-2')).toBe(true)
     expect(events.some((event) => event.type === 'REPLAY_STARTED' && event.taskId === stickyTask.id && event.workerId === 'worker-2')).toBe(true)
     expect(transferred.workers[1].workflowCache.some((entry) => entry.workflowId === 'workflow-1')).toBe(true)
+    expect(transferred.workers[0].workflowCache.some((entry) => entry.workflowId === 'workflow-1')).toBe(false)
+    expect(events.some((event) =>
+      event.type === 'CACHE_EVICTED'
+      && event.workflowId === 'workflow-1'
+      && event.workerId === 'worker-1'
+      && event.reason === 'STICKY_FALLBACK',
+    )).toBe(true)
+  })
+
+  it('reuses the cache when a sticky fallback returns to the same Worker', () => {
+    const simulation = new Simulation({
+      workflowStartRate: 0,
+      activitiesPerWorkflow: 2,
+      activityFanout: 1,
+      workflowSlots: 1,
+      cpuCapacity: 1,
+    })
+    simulation.startWorkflow()
+    runUntil(simulation, (candidate) => candidate.workflowCache.some((entry) => entry.workflowId === 'workflow-1'))
+    simulation.updateConfig({ workflowSlots: 0 })
+    const waiting = runUntil(simulation, (candidate) => candidate.tasks.some((task) =>
+      task.type === 'workflow' && task.routingState === 'sticky-wait' && task.state === 'queued',
+    ))
+    const stickyTask = waiting.tasks.find((task) => task.type === 'workflow' && task.routingState === 'sticky-wait')!
+    runUntil(simulation, () => simulation.getEventsSince(0).some((event) =>
+      event.type === 'STICKY_FALLBACK' && event.taskId === stickyTask.id,
+    ), STICKY_SCHEDULE_TO_START_TIMEOUT_SECONDS + 3)
+
+    simulation.updateConfig({ workflowSlots: 1 })
+    runUntil(simulation, () => simulation.getEventsSince(0).some((event) =>
+      event.type === 'CACHE_HIT' && event.taskId === stickyTask.id,
+    ))
+    const events = simulation.getEventsSince(0)
+    expect(events.some((event) => event.type === 'REPLAY_STARTED' && event.taskId === stickyTask.id)).toBe(false)
+    expect(events.some((event) => event.type === 'CACHE_EVICTED' && event.reason === 'STICKY_FALLBACK')).toBe(false)
   })
 
   it('clears affinity when its Worker is removed', () => {
