@@ -163,8 +163,8 @@ A Workflow Task has a `phase` (`initial`, `decision`, or `final`) and a `routing
 
 ## Pollers and Slots
 
-Poller states are `long-polling`, `task-received`, and `dispatching`.
-The engine never assigns `dispatching`; a Poller returns to `long-polling` as soon as poll dispatch ends.
+Poller states are `long-polling` and `task-received`.
+A Poller returns to `long-polling` as soon as poll dispatch ends.
 Slot states are `available`, `reserved`, `occupied`, and `draining`.
 
 Matching runs each tick for each Task type.
@@ -243,7 +243,10 @@ Eviction reasons are:
 | `MEMORY_PRESSURE` | Worker memory above capacity |
 | `WORKFLOW_COMPLETED` | Workflow completed |
 | `WORKER_REMOVED` | Worker started draining |
-| `STICKY_FALLBACK` | Sticky schedule-to-start timeout |
+| `STICKY_FALLBACK` | Another Worker cached the Workflow after a sticky fallback, leaving this Worker's entry stale |
+
+`cacheEvictions` counts forced evictions.
+A `WORKFLOW_COMPLETED` removal is a normal close, so it emits `CACHE_EVICTED` without incrementing the counter.
 
 ## Sticky routing
 
@@ -253,7 +256,10 @@ Initial Workflow Tasks always use `shared-queue`.
 A sticky-wait Task can be matched only by its preferred Worker.
 If it is still queued `STICKY_SCHEDULE_TO_START_TIMEOUT_SECONDS` (2 s) after it was scheduled, it falls back.
 The timer starts at scheduling, so queue admission counts toward it.
-On fallback the Task becomes `shared-fallback`, any Worker can take it, the Workflow's cache entry is invalidated with reason `STICKY_FALLBACK`, and a `STICKY_FALLBACK` event is emitted.
+On fallback the Task becomes `shared-fallback`, any Worker can take it, and a `STICKY_FALLBACK` event is emitted.
+The cache entry survives the fallback.
+If the original Worker takes the Task, it is a cache hit with no replay, matching SDK Workers that skip already-applied Events when handed a full history for a current cached run.
+If another Worker takes it, that Worker misses and replays, and once it caches the Workflow the original Worker's entry is evicted with reason `STICKY_FALLBACK`.
 
 ## Multiple Workers
 
@@ -285,7 +291,7 @@ Raising `workerCount` adds Workers or reactivates draining ones.
 
 ## Snapshots and metrics
 
-`getSnapshot()` returns copies of the config, Workflows, active Tasks, Task Queues, Workers, Pollers, Slots, cache entries, aggregate resource state, cache metrics, rolling metrics, metric histories, and the last `MAX_RECENT_EVENTS` events.
+`getSnapshot()` returns copies of the config, live and recently completed Workflows, live Tasks, Task Queues, Workers, Pollers, Slots, cache entries, aggregate resource state, cache metrics, rolling metrics, metric histories, and the last `MAX_RECENT_EVENTS` events.
 Aggregate CPU, I/O, and memory utilization divide total demand or usage by per-Worker capacity times Worker count.
 
 Rolling metrics use a `METRIC_WINDOW_SECONDS` (5 s) window:
@@ -293,7 +299,7 @@ Rolling metrics use a `METRIC_WINDOW_SECONDS` (5 s) window:
 - Task throughput, total and per Task type.
 - Activity throughput and Workflow completions per second.
 - Average Slot residence, measured from Poller acquisition to completion return start.
-- Workflow and Activity schedule-to-start, averaged over every started Task in the run.
+- Workflow and Activity schedule-to-start, averaged over every started Task in the run from running totals.
 
 Cache metrics are global: size, capacity (per-Worker capacity times active Workers), hits, misses, evictions, hit rate, replays started, and total replay CPU seconds.
 
@@ -307,8 +313,6 @@ Every `METRIC_SAMPLE_SECONDS` (0.25 s) the engine appends one sample to each his
 | `backlogHistory` | Task Queue lengths |
 | `taskThroughputHistory` | Rolling Task throughput |
 | `taskLatencyHistory` | Average schedule-to-completion latency of Tasks completed in the window |
-| `slotResidenceHistory` | Rolling Slot residence |
-| `workflowCompletionHistory` | Rolling Workflow completion rate |
 | `cpuUtilizationHistory`, `ioUtilizationHistory`, `memoryUtilizationHistory` | Aggregate utilization |
 
 Per-Task-type histories hold `total`, `workflow`, and `activity` values.
@@ -316,13 +320,21 @@ For Poller busy ratio, Slot utilization, and sync match rate, `total` is the lar
 Each sample carries `throttled` and `replaying` flags that are set if CPU or I/O throttling, memory pressure, or replay occurred at any point since the previous sample.
 Resource histories set `throttled` from that resource alone.
 
+Charts plot the whole run, so histories are capped at `MAX_METRIC_HISTORY_SAMPLES`.
+When a history passes the cap, every history drops every second sample, folding the dropped sample's flags into the kept one, and the sampling interval doubles.
+Long runs therefore keep between half and all of the cap at a uniform, coarser interval.
+
 A load-test round runs from `beginTaskThroughputRound()` to `endTaskThroughputRound()`.
-During a round the engine records cumulative round throughput samples, and `taskDistribution` reports completed count, throughput, average, P25, P50, P75, P95, P99, and max schedule-to-completion latency for Tasks completed in the round.
+`roundTaskThroughput` reports cumulative throughput and elapsed time for the current or most recent round, and `taskDistribution` reports completed count, throughput, average, P25, P50, P75, P95, P99, and max schedule-to-completion latency for Tasks completed in the round.
+Round latencies are kept as a count per exact latency value, which gives exact percentiles in memory bounded by the number of distinct latencies.
 
 ## Events
 
 The engine emits semantic events with `id`, `timestamp`, `type`, and context fields such as `workflowId`, `taskId`, `pollerId`, `slotId`, `workerId`, `routingState`, `reason`, and `replayCpuSeconds`.
-`getEventsSince(id)` returns every event after that ID.
+`getEventsSince(id)` returns every retained event after that ID.
+The engine retains at least the most recent `MAX_RETAINED_EVENTS` events and trims older ones.
+
+Other state is bounded the same way: completed Tasks are dropped on completion, completed Workflows are dropped `COMPLETED_WORKFLOW_RETENTION_SECONDS` (60 s) after completing, and rolling-window records are trimmed to the window.
 
 | Area | Events |
 | --- | --- |

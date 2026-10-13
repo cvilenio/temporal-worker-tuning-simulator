@@ -131,9 +131,9 @@ A larger cache uses more memory and causes fewer misses, less replay, and less r
 ### Sticky routing
 
 A follow-up Workflow Task for a cached Workflow waits for the Worker that holds the cache entry.
-If that Worker does not pick it up within 2 seconds, the Task falls back to the shared Workflow Task Queue and the cache entry is invalidated.
-The fallback Task then replays on whichever Worker takes it.
-So starved Workflow Slots or Pollers can turn cache hits into replays.
+If that Worker does not pick it up within 2 seconds, the Task falls back to the shared Workflow Task Queue.
+The original Worker still hits its cache if it takes the fallback Task; any other Worker replays, and the original Worker's stale entry is evicted.
+So with several Workers, starved Workflow Slots or Pollers can turn cache hits into replays.
 
 The UI labels this mechanism the Workflow cache.
 The Worker-side cache and the server-side sticky Task Queue are distinct components that serve one optimization.
@@ -182,7 +182,7 @@ Adding Activity Slots helps until another resource becomes the limit.
 ### Workflow Slot constrained
 
 No preset: set Workflow Slots to 1 and raise the Workflow start rate or the number of Execution Phases.
-Workflow Tasks queue behind the busy Slot, and sticky fallbacks cause extra replay.
+Workflow Tasks queue behind the busy Slot and their schedule-to-start latency grows.
 
 ### CPU constrained
 

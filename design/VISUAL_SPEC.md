@@ -93,7 +93,7 @@ Each lane mirrors its queue on the Worker side:
 
 The Workflow Cache view sits between the two lanes.
 It draws up to eight cells per Worker, labeled with the cached Workflow's short ID (`WF1`, `WF2`), plus an "n / capacity" count.
-A cache hit flashes the matching cell in `--color-replay` for 0.5 seconds.
+Cell labels use `--color-cache`, and a cache hit flashes the matching cell in `--color-cache` for 0.5 seconds.
 An eviction shows "WFn evicted" in `--color-danger`, or "WFn closed" when the Workflow completed, and fades over 0.8 seconds.
 The right end of the row shows "Hit N% · Replays N".
 A capacity of 0 shows "disabled".
@@ -142,11 +142,11 @@ The page uses a single dark theme.
 | `--color-activity` | Activity Tasks, Activity Task chart series |
 | `--color-cpu` | CPU meter and CPU chart line |
 | `--color-io` | I/O meter and I/O chart line |
-| `--color-cache` | Workflow cache memory segment |
+| `--color-cache` | Workflow cache cells, cache hit flash, Workflow cache memory segment |
 | `--color-active-task` | Active Task memory segment |
 | `--color-magenta` | Memory chart line |
-| `--color-replay`, `--color-warning` | Replay, reserved Slots, cache hit flash |
-| `--color-success` | Completed Workflows, cache labels, sticky routing, warm badges |
+| `--color-replay`, `--color-warning` | Replay, reserved Slots |
+| `--color-success` | Completed Workflows, sticky routing, warm badges |
 | `--color-danger` | Throttling, evictions, sticky fallback |
 | `--color-pause` | Auto-pause markers on charts |
 | `--color-control` | Accent for buttons, sliders, and checkboxes |
