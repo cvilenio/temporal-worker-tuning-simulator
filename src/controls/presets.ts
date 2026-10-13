@@ -19,7 +19,7 @@ export const SIMULATOR_PRESETS = {
     config: defaultConfig,
   },
   defaultTriggered: {
-    label: 'Default setting (triggered mode)',
+    label: 'Default setting (manual mode)',
     generationMode: 'triggered',
     workflowRateValue: 6,
     workflowRateUnit: 'minute',

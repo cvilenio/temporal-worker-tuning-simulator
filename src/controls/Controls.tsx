@@ -299,12 +299,12 @@ export function WorkflowGenerationControls({
   }
 
   return (
-    <section className="workflow-generation-controls" aria-label="Workflow generation">
-      <div className="generation-config-label">Workflow generation</div>
+    <section className="workflow-generation-controls" aria-label="Workflow generation mode">
+      <div className="generation-config-label">Workflow generation mode</div>
       <div className="generation-mode" role="radiogroup" aria-label="Workflow generation mode">
         <label>
           <input type="radio" name="workload-mode" checked={generationMode === 'triggered'} onChange={() => onGenerationModeChange('triggered')} />
-          Triggered
+          Manual
         </label>
         <label>
           <input type="radio" name="workload-mode" checked={generationMode === 'continuous'} onChange={() => onGenerationModeChange('continuous')} />

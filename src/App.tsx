@@ -186,7 +186,7 @@ export default function App() {
   return (
     <main>
       <header>
-        <h1>Temporal Worker Scaling Simulator</h1>
+        <h1>Temporal Worker Tuning Simulator</h1>
         <div className="clock">Current run time <strong>{(snapshot.roundTaskThroughput?.elapsedSeconds ?? 0).toFixed(1)}s</strong></div>
       </header>
 
