@@ -139,6 +139,11 @@ function Overflow({ count, x, y }: { count: number; x: number; y: number }) {
   return <text x={x} y={y} className="overflow">+{count - maxVisibleQueueTasks}</text>
 }
 
+// The track ends early enough to leave room for the widest detail label,
+// such as "100% (12.5 / 4 throughput)", right-aligned at x=1160.
+const RESOURCE_TRACK_X = 845
+const RESOURCE_TRACK_WIDTH = 155
+
 function ResourceBar({
   resource,
   label,
@@ -177,20 +182,20 @@ function ResourceBar({
     >
       {(description || throttled) && <title>{description ?? `${label} throughput is being throttled`}</title>}
       <text x="785" y={y + 13} className="section-label">{label}</text>
-      <rect x="875" y={y} width="180" height="18" rx="3" className="resource-track" />
+      <rect x={RESOURCE_TRACK_X} y={y} width={RESOURCE_TRACK_WIDTH} height="18" rx="3" className="resource-track" />
       {visibleSegments ? visibleSegments.map((segment) => (
         <rect
           key={segment.className}
-          x={875 + 180 * segment.start}
+          x={RESOURCE_TRACK_X + RESOURCE_TRACK_WIDTH * segment.start}
           y={y}
-          width={180 * segment.width}
+          width={RESOURCE_TRACK_WIDTH * segment.width}
           height="18"
           className={`resource-fill ${segment.className}${throttled ? ' throttled' : ''}`}
         >
           <title>{segment.label}</title>
         </rect>
       )) : (
-        <rect x="875" y={y} width={180 * utilization} height="18" rx="3" className={`resource-fill ${fillClass}${throttled ? ' throttled' : ''}`} />
+        <rect x={RESOURCE_TRACK_X} y={y} width={RESOURCE_TRACK_WIDTH * utilization} height="18" rx="3" className={`resource-fill ${fillClass}${throttled ? ' throttled' : ''}`} />
       )}
       <text x="1160" y={y + 13} textAnchor="end" className="metric-value">
         {percent}%{detail ? ` (${detail})` : ''}
@@ -295,12 +300,12 @@ export function SimulationScene({
 
       <g className="memory-legend" aria-label="Memory colors: base Worker, active Tasks, Workflow cache">
         <text x="785" y="479">Memory colors</text>
-        <rect x="875" y="471" width="8" height="8" className="memory-base-fill" />
-        <text x="887" y="479">Base Worker</text>
-        <rect x="958" y="471" width="8" height="8" className="memory-task-fill" />
-        <text x="970" y="479">Active Tasks</text>
-        <rect x="1045" y="471" width="8" height="8" className="memory-cache-fill" />
-        <text x="1057" y="479">Workflow cache</text>
+        <rect x="845" y="471" width="8" height="8" className="memory-base-fill" />
+        <text x="857" y="479">Base Worker</text>
+        <rect x="928" y="471" width="8" height="8" className="memory-task-fill" />
+        <text x="940" y="479">Active Tasks</text>
+        <rect x="1015" y="471" width="8" height="8" className="memory-cache-fill" />
+        <text x="1027" y="479">Workflow cache</text>
       </g>
       <ResourceBar resource="cpu" label="CPU" y={491} utilization={snapshot.cpuUtilization} throttled={snapshot.cpuThrottled} detail={`${compactNumber(snapshot.cpuDemand)} / ${snapshot.config.cpuCapacity * snapshot.workers.length} CPU`} fillClass="cpu-fill" />
       <ResourceBar
