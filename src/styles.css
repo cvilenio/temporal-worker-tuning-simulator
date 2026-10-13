@@ -10,12 +10,12 @@
   --color-workflow: #3acee9;
   --color-activity: #4cfc94;
   --color-cpu: #ffab40;
-  --color-io: #3acee9;
+  --color-io: #7a8cff;
   --color-replay: var(--color-warning);
   --color-success: #d1fdfc;
   --color-warning: #ffab40;
   --color-danger: #e83a16;
-  --color-cache: var(--color-workflow);
+  --color-cache: #f4d35e;
   --color-pause: #d1fdfc;
   --color-control: #444ce7;
   --color-magenta: #ff6cff;
@@ -124,11 +124,11 @@ h1 { margin: 0; font-size: 1.35rem; font-weight: 650; }
 .cache-cell { fill: var(--color-inset); stroke: var(--color-border-strong); stroke-width: 1; }
 .cache-cell.occupied { fill: var(--color-surface); stroke: var(--color-border-strong); }
 .cache-cell.hit { animation: cache-hit-pulse 500ms ease-out; }
-.cache-cell-label { fill: var(--color-success); font-size: 9px; font-weight: 700; pointer-events: none; }
+.cache-cell-label { fill: var(--color-cache); font-size: 9px; font-weight: 700; pointer-events: none; }
 .cache-disabled, .cache-hit-rate { fill: var(--color-text-muted); font-size: 10px; }
 .cache-evicted { fill: var(--color-danger); font-size: 9px; animation: cache-eviction-fade 800ms ease-out; }
 @keyframes cache-hit-pulse {
-  0% { fill: var(--color-replay); stroke: var(--color-text); stroke-width: 2.5; }
+  0% { fill: var(--color-cache); stroke: var(--color-text); stroke-width: 2.5; }
   100% { fill: var(--color-surface); stroke: var(--color-border-strong); stroke-width: 1; }
 }
 @keyframes cache-eviction-fade {
