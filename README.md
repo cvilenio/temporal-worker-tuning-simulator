@@ -1,6 +1,6 @@
 # Temporal Worker Tuning Simulator
 
-A browser-based simulator that shows how Worker Pollers, Slots, Workflow cache, and CPU, memory, and I/O capacity shape Task throughput and Task Queue backlog.
+A browser-based teaching simulator that shows how Worker Pollers, Slots, Workflow cache, and CPU, memory, and I/O capacity shape Task throughput and Task Queue backlog.
 
 ![Workflow and Activity Tasks flowing from the Temporal Service through Task Queues into a Worker's Pollers and Slots](docs/media/hero.gif)
 
@@ -14,6 +14,67 @@ npm run dev
 ```
 
 Open the URL Vite prints, then press **Start continuous**.
+
+## Before you start
+
+> [!IMPORTANT]
+> This is a teaching simulation.
+> It does not connect to Temporal, read metrics from your Workers, or tune or recommend settings for a real deployment.
+> Every Task, Worker, and metric on screen is simulated in your browser so you can build intuition for how Worker settings interact.
+
+Worker tuning decides whether a Temporal application keeps up with demand, responds promptly, and uses its compute efficiently.
+The settings involved interact in ways that are hard to see from dashboards alone.
+The simulator makes those interactions visible: change one setting and watch Tasks move, queue, and wait.
+
+### From a Workflow Definition to Tasks
+
+A Temporal application runs in two environments.
+The Temporal Service keeps durable state and Event History and decides what work comes next.
+Your Workers run your Workflow and Activity code.
+The two coordinate through Tasks.
+
+A Workflow Definition is a sequence of steps, such as local logic, Timers, and Activity calls.
+As a Workflow Execution runs, Temporal drives those steps forward with two kinds of Tasks:
+
+- A Workflow Task runs your Workflow code until it needs something, then returns Commands such as "schedule these Activities."
+- An Activity Task runs one Activity and returns its result.
+
+A Workflow that calls three Activities one after another produces four Workflow Tasks and three Activity Tasks, alternating.
+The simulator's **Workflow shape** settings control this pattern.
+
+### How Workers receive Tasks
+
+1. A Client asks the Temporal Service to start a Workflow.
+2. The Temporal Service schedules the first Workflow Task on a Task Queue.
+3. A Worker's Poller receives the Task from the Task Queue.
+4. The Worker runs the Task in a Slot.
+5. The Worker reports Commands or results back to the Temporal Service.
+6. The Temporal Service records the progress as Events, then schedules the next Tasks or records completion.
+
+Workflow Tasks and Activity Tasks are queued separately, even under one Task Queue name, and each type has its own Pollers and Slots, which is why the scene shows two lanes.
+
+### Worker capacity
+
+| Setting | Role | Symptom when it is the bottleneck |
+| --- | --- | --- |
+| Pollers | Request Tasks from a Task Queue; a Poller polls only while a Slot is free | The queue grows while Slots sit idle |
+| Slots | Run one Task each, concurrently | Every Slot is busy and Tasks wait in the queue |
+| Workflow cache | Keeps Workflow state in memory so the next Workflow Task skips replaying the Event History | Cache hit rate falls and replay CPU rises |
+| CPU, memory, I/O | The physical capacity that running Tasks share | A meter saturates, Tasks slow down, and the queue grows even though Slots are free |
+
+The same symptom, a growing backlog, can come from any row in this table.
+Learning to tell them apart is the main skill the simulator teaches.
+
+### Learning with the simulator
+
+- Before you start a preset, predict which queue will back up and which meter will move, then run it and check your prediction.
+- Change one setting at a time so you can attribute what changes.
+- After you remove a bottleneck, look for the next one, because raising one limit usually moves the constraint somewhere else.
+- Read the Monitoring charts the way you would read production dashboards; [Monitor live metrics](#monitor-live-metrics) maps each chart to its closest SDK or Temporal Cloud metric.
+
+The simulator models fixed Poller and Slot counts, the settings in the [SDK option table](#tune-with-sliders).
+Real SDKs also offer resource-based Slot suppliers and Poller autoscaling, which adjust these counts at runtime; see [Worker performance](https://docs.temporal.io/develop/worker-performance) in the Temporal docs.
+[`design/SCOPE_BEHAVIOR_SPEC.md`](design/SCOPE_BEHAVIOR_SPEC.md) lists what else the model leaves out.
 
 ## Run a preset
 
