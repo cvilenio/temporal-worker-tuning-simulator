@@ -1,8 +1,8 @@
-# Temporal Worker Scaling Simulator — v0 Simulation Engine Specification
+# Temporal Worker Tuning Simulator — v0 Simulation Engine Specification
 
 ## 1. Purpose
 
-This document defines the **mechanics of the simulation engine** for the Temporal Worker Scaling Simulator.
+This document defines the **mechanics of the simulation engine** for the Temporal Worker Tuning Simulator.
 
 The companion Scope & Behavioral Spec defines:
 

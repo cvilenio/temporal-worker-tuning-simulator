@@ -1,8 +1,8 @@
-# Temporal Worker Scaling Simulator — v0 Visual & Interaction Specification
+# Temporal Worker Tuning Simulator — v0 Visual & Interaction Specification
 
 ## 1. Purpose
 
-This document defines the **visual structure and interaction model** for the first crude implementation of the Temporal Worker Scaling Simulator.
+This document defines the **visual structure and interaction model** for the first crude implementation of the Temporal Worker Tuning Simulator.
 
 The goal of v0 is not to look polished.
 
@@ -110,7 +110,7 @@ Recommended composition:
 
 ```text
 ┌─────────────────────────────────────────────────────────────┐
-│ Temporal Worker Scaling Simulator                           │
+│ Temporal Worker Tuning Simulator                            │
 │                                                             │
 │ [Play] [Pause] [Reset]                         Speed: 1×    │
 ├─────────────┬───────────────────────┬───────────────────────┤

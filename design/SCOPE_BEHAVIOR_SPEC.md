@@ -1,4 +1,4 @@
-# Temporal Worker Scaling Simulator — v0 Scope & Behavioral Spec
+# Temporal Worker Tuning Simulator — v0 Scope & Behavioral Spec
 
 ## 1. Purpose
 
