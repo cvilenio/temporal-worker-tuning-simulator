@@ -867,7 +867,7 @@ export class Simulation {
       task.state = 'running'
       task.startedAt = this.time
       const slot = this.getSlots(task.type).find((candidate) => candidate.id === task.assignedSlotId)
-      if (slot) slot.state = 'occupied'
+      if (slot && slot.state !== 'draining') slot.state = 'occupied'
       this.emit(task.type === 'workflow' ? 'WORKFLOW_TASK_STARTED' : 'ACTIVITY_TASK_STARTED', {
         workflowId: task.workflowId,
         taskId: task.id,
@@ -1062,10 +1062,7 @@ export class Simulation {
     const slot = this.getSlots(task.type).find((candidate) => candidate.id === task.assignedSlotId)
     if (slot) {
       slot.taskId = undefined
-      const worker = this.workers.get(slot.workerId)
-      slot.state = worker?.status === 'draining' || slot.ordinal > this.slotLimit(task.type)
-        ? 'draining'
-        : 'available'
+      this.refreshIdleSlotStates(task.type)
     }
     this.emit(task.type === 'workflow' ? 'WORKFLOW_TASK_RESPONSE_SENT' : 'ACTIVITY_TASK_RESPONSE_SENT', {
       workflowId: task.workflowId,
@@ -1492,7 +1489,6 @@ export class Simulation {
     const workerSlots = existing.filter((slot) => slot.workerId === workerId)
     for (const slot of workerSlots) {
       if (slot.ordinal > target) slot.state = 'draining'
-      else if (!slot.taskId) slot.state = 'available'
     }
     while (workerSlots.length < target) {
       const ordinal = workerSlots.length + 1
@@ -1507,7 +1503,36 @@ export class Simulation {
       existing.push(slot)
       workerSlots.push(slot)
     }
-    return existing.filter((slot) => slot.workerId !== workerId || slot.ordinal <= target || slot.taskId)
+    const resized = existing.filter((slot) => slot.workerId !== workerId || slot.ordinal <= target || slot.taskId)
+    this.refreshIdleSlotStates(type, resized.filter((slot) => slot.workerId === workerId), target)
+    return resized
+  }
+
+  // Idle Slots become available only while the Worker's occupied Slots are
+  // below its limit, so lowering the limit never lets new Tasks start until
+  // in-flight Tasks drain the occupied count below it.
+  private refreshIdleSlotStates(
+    type: TaskType,
+    slots: Slot[] = this.getSlots(type),
+    configuredLimit = this.slotLimit(type),
+  ): void {
+    const workerIds = new Set(slots.map((slot) => slot.workerId))
+    for (const workerId of workerIds) {
+      const workerSlots = slots
+        .filter((slot) => slot.workerId === workerId)
+        .sort((left, right) => left.ordinal - right.ordinal)
+      const limit = this.workers.get(workerId)?.status === 'active' ? configuredLimit : 0
+      let freeCapacity = limit - workerSlots.filter((slot) => slot.taskId).length
+      for (const slot of workerSlots) {
+        if (slot.taskId) continue
+        if (slot.ordinal <= limit && freeCapacity > 0) {
+          slot.state = 'available'
+          freeCapacity -= 1
+        } else {
+          slot.state = 'draining'
+        }
+      }
+    }
   }
 
   private removeDrainedSlots(): void {
@@ -1519,6 +1544,8 @@ export class Simulation {
       const worker = this.workers.get(slot.workerId)
       return slot.taskId || (worker?.status === 'active' && slot.ordinal <= this.config.activitySlots)
     })
+    this.refreshIdleSlotStates('workflow')
+    this.refreshIdleSlotStates('activity')
   }
 
   private removeDrainedWorkers(): void {

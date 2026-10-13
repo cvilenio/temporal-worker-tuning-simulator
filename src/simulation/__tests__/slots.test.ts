@@ -39,6 +39,43 @@ describe('Slot capacity', () => {
     expect(simulation.getSnapshot().activitySlots).toHaveLength(2)
   })
 
+  it('starts no new Task while occupied Slots exceed a lowered limit', () => {
+    const simulation = simulationWith({
+      workflowStartRate: 0,
+      activitiesPerWorkflow: 1,
+      workflowPollers: 4,
+      workflowSlots: 4,
+      activityPollers: 4,
+      activitySlots: 4,
+      cpuCapacity: 1,
+      activityTaskCpuDemand: 0.05,
+      activityTaskBaseDurationSeconds: 3,
+      activityTaskDurationJitterPercent: 50,
+    })
+    simulation.startWorkflows(12)
+    for (let tick = 0; tick < 400 && simulation.getSnapshot().activitySlots.filter((slot) => slot.taskId).length < 4; tick += 1) {
+      simulation.step(TICK_SECONDS)
+    }
+    expect(simulation.getSnapshot().activitySlots.filter((slot) => slot.taskId)).toHaveLength(4)
+
+    simulation.updateConfig({ activitySlots: 2 })
+    let previous = new Set(simulation.getSnapshot().activitySlots.flatMap((slot) => slot.taskId ? [slot.taskId] : []))
+    let newTasksStarted = 0
+    for (let tick = 0; tick < 400; tick += 1) {
+      simulation.step(TICK_SECONDS)
+      const current = simulation.getSnapshot().activitySlots.flatMap((slot) => slot.taskId ? [slot.taskId] : [])
+      const started = current.filter((taskId) => !previous.has(taskId))
+      const carriedOver = current.length - started.length
+      if (started.length > 0) {
+        expect(carriedOver + started.length).toBeLessThanOrEqual(2)
+        newTasksStarted += started.length
+      }
+      previous = new Set(current)
+    }
+    expect(newTasksStarted).toBeGreaterThan(0)
+    expect(simulation.getSnapshot().activitySlots).toHaveLength(2)
+  })
+
   it('drains running Tasks when Activity Slots scale to zero', () => {
     const simulation = simulationWith({
       workflowStartRate: 0,
