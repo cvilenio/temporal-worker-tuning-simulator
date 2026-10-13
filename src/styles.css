@@ -62,7 +62,7 @@ h1 { margin: 0; font-size: 1.35rem; font-weight: 650; }
 .simulator-config-sections { margin-top: 0.5rem; border: 1px solid var(--color-border); border-radius: 4px; background: var(--color-inset); }
 .preset-control { display: flex; width: min(420px, 100%); align-items: center; gap: 0.75rem; padding: 0.55rem 0.65rem; color: var(--color-text-secondary); font-size: 0.8rem; }
 .preset-control span { min-width: 90px; }
-.preset-control select { flex: 1; color: var(--color-text); background: var(--color-panel); border: 1px solid var(--color-border-strong); border-radius: 4px; padding: 0.35rem 0.45rem; }
+.preset-control select { flex: 1; color: var(--color-text); background: var(--color-surface); border: 1px solid var(--color-border-strong); border-radius: 4px; padding: 0.35rem 0.45rem; }
 .custom-settings { border-top: 1px solid var(--color-border); }
 .custom-settings > summary { cursor: pointer; padding: 0.55rem 0.65rem; color: var(--color-text-secondary); font-size: 0.8rem; }
 .custom-settings-sections { border-top: 1px solid var(--color-border); }
@@ -227,7 +227,7 @@ h1 { margin: 0; font-size: 1.35rem; font-weight: 650; }
   margin: 0;
   border: 1px solid var(--color-border-strong);
   border-radius: 0.2rem;
-  background-color: var(--color-panel);
+  background-color: var(--color-surface);
 }
 .profile-lock input[type='checkbox']:checked {
   border-color: var(--color-control);
